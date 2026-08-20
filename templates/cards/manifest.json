@@ -1,0 +1,5 @@
+{
+  "title": "卡片网格",
+  "description": "圆形 Logo 与简短状态分列展示，悬停时显示完整状态原因。",
+  "layout": "cards"
+}

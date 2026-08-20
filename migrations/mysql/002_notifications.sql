@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS `{{prefix}}flm_notification_outbox` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `event_key` CHAR(64) NOT NULL,
+  `link_id` BIGINT UNSIGNED NULL,
+  `event_type` VARCHAR(24) NOT NULL,
+  `channel` VARCHAR(24) NOT NULL,
+  `subject` VARCHAR(255) NOT NULL,
+  `message` LONGTEXT NOT NULL,
+  `payload_json` LONGTEXT NOT NULL,
+  `status` VARCHAR(16) NOT NULL DEFAULT 'pending',
+  `attempts` INT NOT NULL DEFAULT 0,
+  `available_at` BIGINT NOT NULL,
+  `lease_token` CHAR(32) NULL,
+  `lease_until` BIGINT NULL,
+  `last_error` VARCHAR(500) NULL,
+  `created_at` BIGINT NOT NULL,
+  `sent_at` BIGINT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `flm_notification_event_channel` (`event_key`, `channel`),
+  KEY `flm_notification_schedule` (`status`, `available_at`, `lease_until`),
+  KEY `flm_notification_link_created` (`link_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

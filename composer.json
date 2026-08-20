@@ -1,0 +1,22 @@
+{
+    "name": "nhpt/friend-links",
+    "description": "Theme-independent friend links management and health checks for Typecho.",
+    "type": "typecho-plugin",
+    "license": "MIT",
+    "require": {
+        "php": ">=7.4",
+        "phpmailer/phpmailer": "^6.9"
+    },
+    "autoload": {
+        "psr-4": {
+            "TypechoPlugin\\FriendLinks\\": "src/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "platform": {
+            "php": "7.4.0"
+        },
+        "sort-packages": true
+    }
+}
