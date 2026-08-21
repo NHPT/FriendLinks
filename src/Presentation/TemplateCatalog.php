@@ -31,7 +31,11 @@ final class TemplateCatalog
             if (!is_file($manifestPath)) {
                 continue;
             }
-            $manifest = json_decode((string) file_get_contents($manifestPath), true);
+            $manifestJson = @file_get_contents($manifestPath);
+            if (false === $manifestJson) {
+                continue;
+            }
+            $manifest = json_decode($manifestJson, true);
             if (!is_array($manifest)) {
                 continue;
             }

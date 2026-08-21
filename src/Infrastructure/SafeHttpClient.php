@@ -209,7 +209,7 @@ final class SafeHttpClient
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_CONNECTTIMEOUT_MS => max(1, $connectTimeoutMs),
             CURLOPT_TIMEOUT_MS => max(1, $timeoutMs),
-            CURLOPT_USERAGENT => 'FriendLinks/0.2.1 (+Typecho health check)',
+            CURLOPT_USERAGENT => 'FriendLinks/0.2.2 (+Typecho health check)',
             CURLOPT_HTTPHEADER => $requestHeaders ?: ['Accept: text/html,application/json;q=0.9,*/*;q=0.1'],
             CURLOPT_ENCODING => '',
             CURLOPT_SSL_VERIFYPEER => true,

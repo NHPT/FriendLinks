@@ -77,11 +77,11 @@ try {
 }
 $workerUrl = Router::url('friendlinks-worker', [], $options->index);
 ?>
-<link rel="stylesheet" href="<?php echo flm_e($assetBase . 'assets/frontend.css?v=' . filemtime(dirname(__DIR__) . '/assets/frontend.css')); ?>">
+<link rel="stylesheet" href="<?php echo flm_e($assetBase . 'assets/frontend.css?v=' . \TypechoPlugin\FriendLinks\Presentation\AssetVersion::forFile(dirname(__DIR__) . '/assets/frontend.css')); ?>">
 <?php foreach ($templates as $template): ?>
   <?php $templateStylesheet = $templateCatalog->stylesheetPath($template); ?>
   <?php if (null !== $templateStylesheet): ?>
-    <link rel="stylesheet" href="<?php echo flm_e($assetBase . 'templates/' . rawurlencode($template['id']) . '/style.css?v=' . filemtime($templateStylesheet)); ?>">
+    <link rel="stylesheet" href="<?php echo flm_e($assetBase . 'templates/' . rawurlencode($template['id']) . '/style.css?v=' . \TypechoPlugin\FriendLinks\Presentation\AssetVersion::forFile($templateStylesheet)); ?>">
   <?php endif; ?>
 <?php endforeach; ?>
 <div class="main flm-admin">
@@ -201,5 +201,5 @@ $workerUrl = Router::url('friendlinks-worker', [], $options->index);
     </div>
   </div>
 </div>
-<script defer src="<?php echo flm_e($assetBase . 'assets/frontend.js?v=' . filemtime(dirname(__DIR__) . '/assets/frontend.js')); ?>"></script>
+<script defer src="<?php echo flm_e($assetBase . 'assets/frontend.js?v=' . \TypechoPlugin\FriendLinks\Presentation\AssetVersion::forFile(dirname(__DIR__) . '/assets/frontend.js')); ?>"></script>
 <?php require __DIR__ . '/_footer.php'; ?>

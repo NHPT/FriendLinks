@@ -4,7 +4,11 @@ if (!defined('__TYPECHO_ADMIN__')) {
     exit;
 }
 
-require_once dirname(__DIR__) . '/vendor/autoload.php';
+$autoload = dirname(__DIR__) . '/vendor/autoload.php';
+if (!@is_file($autoload)) {
+    throw new \Typecho\Widget\Exception('FriendLinks 依赖文件缺失。', 500);
+}
+require_once $autoload;
 $user->pass('administrator');
 
 function flm_admin_file(string $file): string
@@ -13,8 +17,17 @@ function flm_admin_file(string $file): string
     return rtrim(__TYPECHO_ROOT_DIR__, '/\\') . '/' . trim($adminDir, '/\\') . '/' . ltrim($file, '/\\');
 }
 
-require flm_admin_file('header.php');
-require flm_admin_file('menu.php');
+function flm_require_admin_file(string $file): void
+{
+    $path = flm_admin_file($file);
+    if (!@is_file($path)) {
+        throw new \Typecho\Widget\Exception('Typecho 后台资源文件缺失。', 500);
+    }
+    require $path;
+}
+
+flm_require_admin_file('header.php');
+flm_require_admin_file('menu.php');
 
 function flm_e($value): string
 {
@@ -57,5 +70,5 @@ function flm_tabs(string $current): void
 ?>
 <link rel="stylesheet" href="<?php echo flm_e(
     rtrim($options->pluginUrl, '/') . '/FriendLinks/assets/admin.css?v='
-    . filemtime(dirname(__DIR__) . '/assets/admin.css')
+    . \TypechoPlugin\FriendLinks\Presentation\AssetVersion::forFile(dirname(__DIR__) . '/assets/admin.css')
 ); ?>">

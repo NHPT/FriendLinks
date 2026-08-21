@@ -35,7 +35,7 @@ final class ContentInjector
         $cssPath = dirname(__DIR__, 2) . '/assets/frontend.css';
         $jsPath = dirname(__DIR__, 2) . '/assets/frontend.js';
         echo '<link rel="stylesheet" href="' . htmlspecialchars(
-            $assetBase . 'frontend.css?v=' . filemtime($cssPath),
+            $assetBase . 'frontend.css?v=' . AssetVersion::forFile($cssPath),
             ENT_QUOTES,
             'UTF-8'
         ) . '">' . "\n";
@@ -44,11 +44,11 @@ final class ContentInjector
         $stylesheetPath = $catalog->stylesheetPath($template);
         if (null !== $stylesheetPath) {
             $templateUrl = $pluginBase . 'templates/'
-                . rawurlencode($template['id']) . '/style.css?v=' . filemtime($stylesheetPath);
+                . rawurlencode($template['id']) . '/style.css?v=' . AssetVersion::forFile($stylesheetPath);
             echo '<link rel="stylesheet" href="' . htmlspecialchars($templateUrl, ENT_QUOTES, 'UTF-8') . '">' . "\n";
         }
         echo '<script defer src="' . htmlspecialchars(
-            $assetBase . 'frontend.js?v=' . filemtime($jsPath),
+            $assetBase . 'frontend.js?v=' . AssetVersion::forFile($jsPath),
             ENT_QUOTES,
             'UTF-8'
         ) . '"></script>' . "\n";

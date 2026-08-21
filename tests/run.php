@@ -12,6 +12,7 @@ use TypechoPlugin\FriendLinks\Infrastructure\DingTalkSigner;
 use TypechoPlugin\FriendLinks\Infrastructure\SafeHttpClient;
 use TypechoPlugin\FriendLinks\Infrastructure\WebhookSigner;
 use TypechoPlugin\FriendLinks\Infrastructure\WorkerSigner;
+use TypechoPlugin\FriendLinks\Presentation\AssetVersion;
 use TypechoPlugin\FriendLinks\Presentation\TemplateCatalog;
 use TypechoPlugin\FriendLinks\Presentation\StatusLabels;
 
@@ -147,6 +148,18 @@ foreach (['cards', 'compact', 'logo-grid', 'directory', 'minimal'] as $template)
     check(isset($templates[$template]), 'bundled template is available: ' . $template);
 }
 check(!(new TemplateCatalog())->exists('../invalid'), 'invalid template identifier is rejected');
+check(
+    (string) filemtime(__FILE__) === AssetVersion::forFile(__FILE__),
+    'asset version uses the file modification time'
+);
+check(
+    'missing' === AssetVersion::forFile(__DIR__ . '/missing-asset.css'),
+    'missing asset version does not emit a filesystem warning'
+);
+check(
+    !is_file(dirname(__DIR__) . '/vendor/phpmailer/phpmailer/get_oauth_token.php'),
+    'unused PHPMailer OAuth helper is not shipped'
+);
 check('不可用 · 无法连接' === StatusLabels::summary('down', 'http_unreachable'), 'status summary is localized');
 check('已完成' === StatusLabels::runState('completed'), 'worker run state is localized');
 check('异常' === StatusLabels::shortState('degraded'), 'compact card status is localized');

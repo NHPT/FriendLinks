@@ -20,13 +20,14 @@ require_once __DIR__ . '/vendor/autoload.php';
  *
  * @package FriendLinks
  * @author NHPT
- * @version 0.2.1
+ * @version 0.2.2
  * @since 1.2.0
  * @link https://github.com/NHPT
  */
 final class Plugin implements PluginInterface
 {
     private const MENU_NAME = '友情链接';
+    private const MENU_INDEX_OPTION = 'friendlinks_menu_index';
     private const SETTINGS_BACKUP_OPTION = 'friendlinks_settings_backup';
     private const ACTION_NAME = 'friendlinks';
     private const ROUTE_NAME = 'friendlinks-worker';
@@ -55,6 +56,7 @@ final class Plugin implements PluginInterface
         self::removeAdminRegistration();
 
         $menuIndex = Helper::addMenu(self::MENU_NAME);
+        self::saveMenuIndex($menuIndex);
         Helper::addPanel(
             $menuIndex,
             self::PANELS[0],
@@ -177,53 +179,91 @@ final class Plugin implements PluginInterface
     {
         $database = new Database();
         $db = $database->native();
+        $menuIndexRow = $database->fetchRowWrite($db->select('value')->from('table.options')
+            ->where('name = ?', self::MENU_INDEX_OPTION)->where('user = ?', 0)->limit(1));
+        $ownedMenuIndexes = [];
+        if ($menuIndexRow && preg_match('/^\d+$/D', (string) $menuIndexRow['value'])) {
+            $ownedMenuIndexes[(int) $menuIndexRow['value']] = true;
+        }
+
         $row = $database->fetchRowWrite($db->select('value')->from('table.options')
             ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
-        if (!$row) {
-            return;
-        }
+        if ($row) {
+            $panelTable = unserialize((string) $row['value'], ['allowed_classes' => false]);
+            if (is_array($panelTable)) {
+                $parents = is_array($panelTable['parent'] ?? null) ? $panelTable['parent'] : [];
+                $children = is_array($panelTable['child'] ?? null) ? $panelTable['child'] : [];
+                $files = is_array($panelTable['file'] ?? null) ? $panelTable['file'] : [];
 
-        $panelTable = unserialize((string) $row['value'], ['allowed_classes' => false]);
-        if (!is_array($panelTable)) {
-            return;
-        }
-        $parents = is_array($panelTable['parent'] ?? null) ? $panelTable['parent'] : [];
-        $children = is_array($panelTable['child'] ?? null) ? $panelTable['child'] : [];
-        $files = is_array($panelTable['file'] ?? null) ? $panelTable['file'] : [];
-
-        foreach ($children as $menuIndex => $items) {
-            if (!is_array($items)) {
-                continue;
-            }
-            $ownsMenu = false;
-            foreach ($items as $item) {
-                $url = is_array($item) ? (string) ($item[2] ?? '') : '';
-                if (false !== strpos(urldecode($url), 'FriendLinks/panel/')) {
-                    $ownsMenu = true;
-                    break;
+                foreach ($children as $menuIndex => $items) {
+                    if (!is_array($items)) {
+                        continue;
+                    }
+                    $remaining = [];
+                    foreach ($items as $item) {
+                        $url = is_array($item) ? (string) ($item[2] ?? '') : '';
+                        if (self::isOwnPanelReference($url)) {
+                            $ownedMenuIndexes[(int) $menuIndex] = true;
+                            continue;
+                        }
+                        $remaining[] = $item;
+                    }
+                    if ($remaining) {
+                        $children[$menuIndex] = $remaining;
+                    } else {
+                        unset($children[$menuIndex]);
+                    }
                 }
-            }
-            if ($ownsMenu) {
-                unset($children[$menuIndex]);
-                $parentIndex = (int) $menuIndex - 10;
-                unset($parents[$parentIndex]);
+
+                foreach ($parents as $parentIndex => $name) {
+                    $menuIndex = (int) $parentIndex + 10;
+                    if (
+                        (isset($ownedMenuIndexes[$menuIndex]) && empty($children[$menuIndex]))
+                        || (self::MENU_NAME === (string) $name && empty($children[$menuIndex]))
+                    ) {
+                        unset($parents[$parentIndex]);
+                    }
+                }
+
+                $panelTable['parent'] = $parents;
+                $panelTable['child'] = $children;
+                $panelTable['file'] = array_values(array_filter(
+                    $files,
+                    static function ($file) {
+                        return !self::isOwnPanelReference((string) $file);
+                    }
+                ));
+                $value = serialize($panelTable);
+                Helper::options()->panelTable = $value;
+                $db->query($db->update('table.options')->rows(['value' => $value])
+                    ->where('name = ?', 'panelTable')->where('user = ?', 0));
             }
         }
 
-        $encodedPanels = array_map(static function ($panel) {
-            return urlencode(trim($panel, '/'));
-        }, self::PANELS);
-        $files = array_values(array_filter($files, static function ($file) use ($encodedPanels) {
-            return !in_array((string) $file, $encodedPanels, true);
-        }));
+        $db->query($db->delete('table.options')->where('name = ?', self::MENU_INDEX_OPTION));
+    }
 
-        $panelTable['parent'] = $parents;
-        $panelTable['child'] = $children;
-        $panelTable['file'] = $files;
-        $value = serialize($panelTable);
-        Helper::options()->panelTable = $value;
-        $db->query($db->update('table.options')->rows(['value' => $value])
-            ->where('name = ?', 'panelTable')->where('user = ?', 0));
-        $db->query($db->delete('table.options')->where('name = ?', 'friendlinks_menu_index'));
+    private static function saveMenuIndex(int $menuIndex): void
+    {
+        $db = Db::get();
+        $db->query($db->delete('table.options')
+            ->where('name = ?', self::MENU_INDEX_OPTION)->where('user = ?', 0));
+        $db->query($db->insert('table.options')->rows([
+            'name' => self::MENU_INDEX_OPTION,
+            'user' => 0,
+            'value' => (string) $menuIndex,
+        ]));
+    }
+
+    private static function isOwnPanelReference(string $reference): bool
+    {
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $decoded = rawurldecode($reference);
+            if ($decoded === $reference) {
+                break;
+            }
+            $reference = $decoded;
+        }
+        return false !== strpos($reference, 'FriendLinks/panel/');
     }
 }

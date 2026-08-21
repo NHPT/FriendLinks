@@ -31,7 +31,11 @@ final class MigrationManager
                 continue;
             }
 
-            $sql = str_replace('{{prefix}}', $this->database->prefix(), (string) file_get_contents($path));
+            $contents = @file_get_contents($path);
+            if (false === $contents) {
+                throw new \RuntimeException('FriendLinks 数据库迁移文件无法读取。');
+            }
+            $sql = str_replace('{{prefix}}', $this->database->prefix(), $contents);
             foreach ($this->statements($sql) as $statement) {
                 $this->database->rawWrite($statement);
             }

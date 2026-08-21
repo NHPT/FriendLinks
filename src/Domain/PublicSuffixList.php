@@ -41,7 +41,11 @@ final class PublicSuffixList
         if (!is_file($file)) {
             throw new \RuntimeException('缺少内置 Public Suffix List。');
         }
-        return new self((string) file_get_contents($file));
+        $contents = @file_get_contents($file);
+        if (false === $contents) {
+            throw new \RuntimeException('内置 Public Suffix List 无法读取。');
+        }
+        return new self($contents);
     }
 
     public function registrableDomain(string $host): ?string

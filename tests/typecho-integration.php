@@ -77,6 +77,12 @@ $friendMenus = array_filter($panelTable['parent'], static function ($name) {
     return '友情链接' === $name;
 });
 $check(1 === count($friendMenus), 'repeated activation keeps one FriendLinks admin menu');
+$menuIndexRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_menu_index')->where('user = ?', 0)->limit(1));
+$check(
+    $menuIndexRow && isset($panelTable['child'][(int) $menuIndexRow['value']]),
+    'activation persists the FriendLinks menu index'
+);
 foreach ($panelTable['child'] as $items) {
     foreach ($items as $item) {
         if (false !== strpos(urldecode((string) ($item[2] ?? '')), 'FriendLinks/panel/')) {
@@ -552,7 +558,55 @@ if (getenv('KEEP_TYPECHO_FIXTURE')) {
 $settings = Settings::all();
 $settings['frontend_template'] = 'minimal';
 Settings::save($settings);
+
+$panelRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
+$panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
+$panelTable['parent'][] = '友情链接';
+$staleParentIndex = array_key_last($panelTable['parent']);
+$staleMenuIndex = (int) $staleParentIndex + 10;
+$stalePanel = rawurlencode(rawurlencode('FriendLinks/panel/links.php'));
+$panelTable['child'][$staleMenuIndex][] = [
+    '友链',
+    '遗留菜单测试',
+    'extending.php?panel=' . $stalePanel,
+    'administrator',
+    false,
+    '',
+];
+$panelTable['file'][] = $stalePanel;
+$panelValue = serialize($panelTable);
+\Utils\Helper::options()->panelTable = $panelValue;
+$db->query($db->update('table.options')->rows(['value' => $panelValue])
+    ->where('name = ?', 'panelTable')->where('user = ?', 0));
+
 Plugin::deactivate();
+$panelRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
+$panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
+$check(
+    !in_array('友情链接', $panelTable['parent'] ?? [], true),
+    'deactivation removes current and stale FriendLinks menus'
+);
+$remainingPanelReferences = [];
+foreach ($panelTable['child'] ?? [] as $items) {
+    foreach ((array) $items as $item) {
+        $remainingPanelReferences[] = rawurldecode(rawurldecode((string) ($item[2] ?? '')));
+    }
+}
+foreach ($panelTable['file'] ?? [] as $file) {
+    $remainingPanelReferences[] = rawurldecode(rawurldecode((string) $file));
+}
+$check(
+    !array_filter($remainingPanelReferences, static function ($reference) {
+        return false !== strpos($reference, 'FriendLinks/panel/');
+    }),
+    'deactivation removes FriendLinks child panels and access whitelist entries'
+);
+$menuIndexRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_menu_index')->where('user = ?', 0)->limit(1));
+$check(!$menuIndexRow, 'deactivation removes the stored FriendLinks menu index');
+
 $db->query($db->delete('table.options')->where('name = ?', 'plugin:FriendLinks'));
 Plugin::activate();
 Plugin::configHandle(Settings::defaults(), true);
