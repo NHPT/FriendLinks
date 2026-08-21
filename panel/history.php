@@ -30,23 +30,47 @@ $history = $repositories->history(200, $linkId);
         </form>
         <div class="typecho-table-wrap">
           <table class="typecho-list-table">
-            <thead><tr><th>友链</th><th>状态</th><th>原因</th><th>HTTP</th><th>耗时</th><th>开始时间</th><th>诊断</th></tr></thead>
+            <thead><tr><th>友链</th><th>状态</th><th class="kit-hidden-mb">原因</th><th class="kit-hidden-mb">HTTP</th><th class="kit-hidden-mb">耗时</th><th class="kit-hidden-mb">开始时间</th><th>诊断</th></tr></thead>
             <tbody>
             <?php foreach ($history as $row): ?>
+              <?php
+              $diagnostic = json_encode(
+                  json_decode((string) $row['details_json'], true),
+                  JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+              );
+              $diagnostic = false === $diagnostic ? '{}' : $diagnostic;
+              $diagnosticId = 'flm-history-diagnostic-' . (int) $row['id'];
+              ?>
               <tr>
                 <td><a href="<?php echo flm_e(flm_panel_url('link-edit', ['id' => (int) $row['link_id']])); ?>"><?php echo flm_e($row['link_name'] ?: '#' . $row['link_id']); ?></a></td>
                 <td><span class="flm-state flm-state-<?php echo flm_e($row['overall_state']); ?>"><?php echo flm_e(StatusLabels::state($row['overall_state'])); ?></span></td>
-                <td><?php echo flm_e(StatusLabels::reason($row['reason_code'])); ?></td>
-                <td><?php echo null === $row['http_code'] ? '-' : (int) $row['http_code']; ?></td>
-                <td><?php echo null === $row['response_time_ms'] ? '-' : (int) $row['response_time_ms'] . ' ms'; ?></td>
-                <td><?php echo flm_e(date('Y-m-d H:i:s', (int) $row['started_at'])); ?></td>
-                <td><details><summary>查看</summary><pre class="flm-code"><?php echo flm_e(json_encode(json_decode($row['details_json'], true), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); ?></pre></details></td>
+                <td class="kit-hidden-mb"><?php echo flm_e(StatusLabels::reason($row['reason_code'])); ?></td>
+                <td class="kit-hidden-mb"><?php echo null === $row['http_code'] ? '-' : (int) $row['http_code']; ?></td>
+                <td class="kit-hidden-mb"><?php echo null === $row['response_time_ms'] ? '-' : (int) $row['response_time_ms'] . ' ms'; ?></td>
+                <td class="kit-hidden-mb"><?php echo flm_e(date('Y-m-d H:i:s', (int) $row['started_at'])); ?></td>
+                <td>
+                  <button
+                    class="btn btn-s"
+                    type="button"
+                    data-flm-history-open="<?php echo flm_e($diagnosticId); ?>"
+                    data-flm-history-title="<?php echo flm_e(($row['link_name'] ?: '#' . $row['link_id']) . ' · ' . date('Y-m-d H:i:s', (int) $row['started_at'])); ?>"
+                  >查看</button>
+                  <template id="<?php echo flm_e($diagnosticId); ?>"><pre class="flm-code"><?php echo flm_e($diagnostic); ?></pre></template>
+                </td>
               </tr>
             <?php endforeach; ?>
             <?php if (!$history): ?><tr><td colspan="7">暂无检测历史</td></tr><?php endif; ?>
             </tbody>
           </table>
         </div>
+
+        <dialog class="flm-dialog" data-flm-history-dialog aria-labelledby="flm-history-dialog-title">
+          <div class="flm-dialog-head">
+            <h3 id="flm-history-dialog-title">检测诊断</h3>
+            <button class="flm-dialog-close" type="button" data-flm-history-close aria-label="关闭" title="关闭">&times;</button>
+          </div>
+          <div class="flm-dialog-body" data-flm-history-content></div>
+        </dialog>
       </div>
     </div>
   </div>

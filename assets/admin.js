@@ -91,8 +91,124 @@
     updateSelectAll();
   }
 
+  function initializeCategoryEditor(button) {
+    var editor = document.querySelector('[data-flm-category-editor]');
+    if (!editor) {
+      return;
+    }
+
+    button.addEventListener('click', function () {
+      var willOpen = editor.hidden;
+      editor.hidden = !willOpen;
+      button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      button.textContent = willOpen ? '收起' : '新增分类';
+      if (willOpen) {
+        var firstInput = editor.querySelector('input[type="text"]');
+        if (firstInput) {
+          firstInput.focus();
+        }
+      }
+    });
+  }
+
+  function initializeNotificationTabs(form) {
+    var buttons = form.querySelectorAll('[data-flm-notification-tab]');
+    var panels = form.querySelectorAll('[data-flm-notification-panel]');
+    if (!buttons.length || !panels.length) {
+      return;
+    }
+
+    function activate(id, updateHash) {
+      Array.prototype.forEach.call(buttons, function (button) {
+        var active = button.getAttribute('data-flm-notification-tab') === id;
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+        button.parentNode.classList.toggle('current', active);
+      });
+      Array.prototype.forEach.call(panels, function (panel) {
+        panel.hidden = panel.getAttribute('data-flm-notification-panel') !== id;
+      });
+      if (updateHash && window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', '#notification-' + id);
+      }
+    }
+
+    Array.prototype.forEach.call(buttons, function (button) {
+      button.addEventListener('click', function () {
+        activate(button.getAttribute('data-flm-notification-tab'), true);
+      });
+    });
+
+    var requested = window.location.hash.indexOf('#notification-') === 0
+      ? window.location.hash.substring(14)
+      : 'policy';
+    if (!form.querySelector('[data-flm-notification-panel="' + requested + '"]')) {
+      requested = 'policy';
+    }
+    activate(requested, false);
+  }
+
+  function initializeHistoryDialog(dialog) {
+    var title = dialog.querySelector('#flm-history-dialog-title');
+    var content = dialog.querySelector('[data-flm-history-content]');
+    var closeButton = dialog.querySelector('[data-flm-history-close]');
+    var previousFocus = null;
+
+    function close() {
+      if ('function' === typeof dialog.close) {
+        dialog.close();
+      } else {
+        dialog.removeAttribute('open');
+      }
+      if (previousFocus) {
+        previousFocus.focus();
+      }
+    }
+
+    Array.prototype.forEach.call(document.querySelectorAll('[data-flm-history-open]'), function (button) {
+      button.addEventListener('click', function () {
+        var source = document.getElementById(button.getAttribute('data-flm-history-open'));
+        if (!source || !content) {
+          return;
+        }
+        previousFocus = button;
+        title.textContent = button.getAttribute('data-flm-history-title') || '检测诊断';
+        content.textContent = '';
+        content.appendChild(source.content.cloneNode(true));
+        if ('function' === typeof dialog.showModal) {
+          dialog.showModal();
+        } else {
+          dialog.setAttribute('open', '');
+        }
+        closeButton.focus();
+      });
+    });
+
+    closeButton.addEventListener('click', close);
+    dialog.addEventListener('click', function (event) {
+      if (event.target === dialog) {
+        close();
+      }
+    });
+    dialog.addEventListener('cancel', function (event) {
+      event.preventDefault();
+      close();
+    });
+    document.addEventListener('keydown', function (event) {
+      if ('Escape' === event.key && dialog.hasAttribute('open')) {
+        event.preventDefault();
+        close();
+      }
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
     Array.prototype.forEach.call(document.querySelectorAll('.flm-template-preview'), initializeTemplatePreview);
     Array.prototype.forEach.call(document.querySelectorAll('.typecho-table-select-all'), initializeBulkSelection);
+    Array.prototype.forEach.call(document.querySelectorAll('[data-flm-category-toggle]'), initializeCategoryEditor);
+    Array.prototype.forEach.call(
+      document.querySelectorAll('[data-flm-notification-settings]'),
+      initializeNotificationTabs
+    );
+    Array.prototype.forEach.call(document.querySelectorAll('[data-flm-history-dialog]'), initializeHistoryDialog);
   });
 }());

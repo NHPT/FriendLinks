@@ -14,20 +14,15 @@ $user->pass('administrator');
 function flm_admin_file(string $file): string
 {
     $adminDir = defined('__TYPECHO_ADMIN_DIR__') ? __TYPECHO_ADMIN_DIR__ : '/admin/';
-    return rtrim(__TYPECHO_ROOT_DIR__, '/\\') . '/' . trim($adminDir, '/\\') . '/' . ltrim($file, '/\\');
-}
-
-function flm_require_admin_file(string $file): void
-{
-    $path = flm_admin_file($file);
+    $path = rtrim(__TYPECHO_ROOT_DIR__, '/\\') . '/' . trim($adminDir, '/\\') . '/' . ltrim($file, '/\\');
     if (!@is_file($path)) {
         throw new \Typecho\Widget\Exception('Typecho 后台资源文件缺失。', 500);
     }
-    require $path;
+    return $path;
 }
 
-flm_require_admin_file('header.php');
-flm_require_admin_file('menu.php');
+require flm_admin_file('header.php');
+require flm_admin_file('menu.php');
 
 function flm_e($value): string
 {

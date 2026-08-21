@@ -19,14 +19,16 @@ $editing = $editing ?: ['name' => '', 'slug' => '', 'sort_order' => 0, 'enabled'
     <div class="row typecho-page-main" role="main">
       <div class="col-mb-12">
         <?php flm_tabs('categories'); ?>
-        <div class="flm-section-head">
-          <div>
-            <h3><?php echo $editId ? '编辑分类' : '新增分类'; ?></h3>
-            <p>分类用于组织前台友链，不会随检测状态自动变更。</p>
-          </div>
-          <?php if ($editId): ?><a class="btn btn-s" href="<?php echo flm_e(flm_panel_url('categories')); ?>">取消编辑</a><?php endif; ?>
+        <div class="flm-toolbar">
+          <?php if ($editId): ?>
+            <a class="btn primary flm-add-link" href="<?php echo flm_e(flm_panel_url('categories')); ?>">新增分类</a>
+          <?php else: ?>
+            <button class="btn primary flm-add-link" type="button" data-flm-category-toggle aria-expanded="false">新增分类</button>
+          <?php endif; ?>
+          <span class="flm-muted"><?php echo count($categories); ?> 个分类</span>
         </div>
-        <form class="flm-form flm-category-form" method="post" action="<?php echo flm_e(flm_action_url('save-category')); ?>">
+        <form class="flm-form flm-category-form" method="post" action="<?php echo flm_e(flm_action_url('save-category')); ?>" data-flm-category-editor<?php echo $editId ? '' : ' hidden'; ?>>
+          <h4><?php echo $editId ? '编辑分类' : '新增分类'; ?></h4>
           <input type="hidden" name="id" value="<?php echo $editId; ?>">
           <div class="flm-category-fields">
             <div class="flm-field">
@@ -42,17 +44,15 @@ $editing = $editing ?: ['name' => '', 'slug' => '', 'sort_order' => 0, 'enabled'
               <input id="flm-category-sort" type="number" name="sort_order" value="<?php echo (int) $editing['sort_order']; ?>">
             </div>
             <label class="flm-check flm-category-enabled"><input type="checkbox" name="enabled" value="1"<?php echo $editing['enabled'] ? ' checked' : ''; ?>> 前台显示</label>
-            <button class="btn primary flm-category-submit" type="submit"><?php echo $editId ? '更新分类' : '新增分类'; ?></button>
+          </div>
+          <div class="flm-form-actions">
+            <div class="flm-inline">
+              <button class="btn primary flm-category-submit" type="submit"><?php echo $editId ? '更新分类' : '新增分类'; ?></button>
+              <a class="btn" href="<?php echo flm_e(flm_panel_url('categories')); ?>">取消</a>
+            </div>
           </div>
         </form>
 
-        <div class="flm-section-head flm-section-head-list">
-          <div>
-            <h3>分类列表</h3>
-            <p>删除分类后，原友链会转为未分类。</p>
-          </div>
-          <span class="flm-muted"><?php echo count($categories); ?> 个分类</span>
-        </div>
         <div class="typecho-table-wrap">
           <table class="typecho-list-table">
             <thead><tr><th>名称</th><th class="kit-hidden-mb">标识</th><th class="kit-hidden-mb">排序</th><th><span class="kit-hidden-mb">前台</span>显示</th><th>操作</th></tr></thead>
@@ -65,9 +65,9 @@ $editing = $editing ?: ['name' => '', 'slug' => '', 'sort_order' => 0, 'enabled'
                 <td><?php echo $category['enabled'] ? '是' : '否'; ?></td>
                 <td>
                   <div class="flm-row-actions">
-                    <a href="<?php echo flm_e(flm_panel_url('categories', ['id' => (int) $category['id']])); ?>">编辑</a>
+                    <a class="btn btn-s" href="<?php echo flm_e(flm_panel_url('categories', ['id' => (int) $category['id']])); ?>">编辑</a>
                     <form method="post" action="<?php echo flm_e(flm_action_url('delete-category', ['id' => (int) $category['id']])); ?>" onsubmit="return confirm('删除分类后，原友链将转为未分类。继续？')">
-                      <button class="btn-link" type="submit">删除</button>
+                      <button class="btn btn-s btn-warn" type="submit">删除</button>
                     </form>
                   </div>
                 </td>

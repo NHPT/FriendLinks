@@ -73,18 +73,13 @@ $link = $link ?: [
               <button class="btn primary" type="submit">保存</button>
               <a class="btn" href="<?php echo flm_e(flm_panel_url('links')); ?>">返回</a>
             </div>
-            <?php if ($id): ?>
-              <button class="btn" type="submit" formaction="<?php echo flm_e(flm_action_url('schedule', ['id' => $id])); ?>">安排检测</button>
-            <?php endif; ?>
           </div>
         </form>
 
         <?php if ($id): ?>
           <h3>最近状态</h3>
           <p><span class="flm-state flm-state-<?php echo flm_e($link['overall_state']); ?>"><?php echo flm_e(StatusLabels::state($link['overall_state'])); ?></span>
-            <?php echo $link['reason_code'] ? ' · ' . flm_e(StatusLabels::reason($link['reason_code'])) : ''; ?>
             <?php echo $link['checked_at'] ? ' · ' . flm_e(date('Y-m-d H:i:s', (int) $link['checked_at'])) : ''; ?></p>
-          <?php if ($link['details_json']): ?><pre class="flm-code"><?php echo flm_e(json_encode(json_decode($link['details_json'], true), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); ?></pre><?php endif; ?>
         <?php endif; ?>
       </div>
     </div>

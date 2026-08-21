@@ -185,18 +185,10 @@ $workerUrl = Router::url('friendlinks-worker', [], $options->index);
 
         <h3>签名 HTTP Worker</h3>
         <p>入口：<code><?php echo flm_e($workerUrl); ?></code></p>
-        <p>密钥：<code><?php echo flm_e($settings['worker_secret']); ?></code></p>
+        <p>密钥：<code>已生成并保存，不在页面源码中回显。</code></p>
         <p class="flm-help">仅接受 HTTPS POST。签名内容依次为 method、path、timestamp、nonce 和请求体 SHA-256，每行一项，使用 HMAC-SHA256。</p>
         <form method="post" action="<?php echo flm_e(flm_action_url('rotate-secret')); ?>" onsubmit="return confirm('旧密钥会立即失效。继续？')"><button class="btn" type="submit">轮换密钥</button></form>
 
-        <div class="flm-danger-zone">
-          <h3>卸载并删除数据</h3>
-          <form class="flm-form" method="post" action="<?php echo flm_e(flm_action_url('uninstall')); ?>" onsubmit="return confirm('此操作会永久删除所有友链、分类和检测历史。继续？')">
-            <label for="flm-delete-confirmation">输入 DELETE 确认</label>
-            <input id="flm-delete-confirmation" type="text" name="confirmation" autocomplete="off">
-            <button class="btn btn-warn" type="submit">停用插件并删除数据</button>
-          </form>
-        </div>
       </div>
     </div>
   </div>

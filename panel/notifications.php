@@ -38,25 +38,36 @@ $placeholders = array_map(static function ($name) {
       <div class="col-mb-12">
         <?php flm_tabs('notifications'); ?>
 
-        <form class="flm-form flm-notification-form" method="post" action="<?php echo flm_e(flm_action_url('save-notifications')); ?>">
-          <div class="flm-section-head">
-            <div>
-              <h3>通知策略</h3>
-              <p>通知事件先写入 Outbox，再由 Worker 异步投递；渠道故障不会影响健康检测结果。</p>
-            </div>
-          </div>
-          <p><label class="flm-check"><input type="checkbox" name="notifications_enabled" value="1"<?php echo $settings['notifications_enabled'] ? ' checked' : ''; ?>> 启用通知</label></p>
-          <div class="flm-trigger-options">
-            <p><label class="flm-check"><input type="checkbox" name="notify_on_down" value="1"<?php echo $settings['notify_on_down'] ? ' checked' : ''; ?>> 站点确认不可用时通知</label></p>
-            <p><label class="flm-check"><input type="checkbox" name="notify_on_recovery" value="1"<?php echo $settings['notify_on_recovery'] ? ' checked' : ''; ?>> 异常恢复正常时通知</label></p>
-            <p><label class="flm-check"><input type="checkbox" name="notify_on_warning" value="1"<?php echo $settings['notify_on_warning'] ? ' checked' : ''; ?>> 预警或不稳定时通知</label></p>
-          </div>
-          <label for="flm-notification-cooldown">同类通知冷却时间（秒）</label>
-          <input id="flm-notification-cooldown" type="number" name="notification_cooldown" min="300" max="604800" value="<?php echo (int) $settings['notification_cooldown']; ?>">
-          <p class="flm-help">同一友链、同一事件和同一渠道在冷却时间内只创建一条通知，默认 3600 秒。</p>
+        <form class="flm-form flm-notification-form" method="post" action="<?php echo flm_e(flm_action_url('save-notifications')); ?>" data-flm-notification-settings>
+          <ul class="typecho-option-tabs fix-tabs flm-notification-tabs" role="tablist" aria-label="通知设置">
+            <?php foreach (['policy' => '通知策略', 'webhook' => 'Webhook', 'dingtalk' => '钉钉机器人', 'email' => 'SMTP 邮件', 'template' => '消息模板'] as $tab => $label): ?>
+              <li<?php echo 'policy' === $tab ? ' class="current"' : ''; ?>>
+                <button type="button" role="tab" data-flm-notification-tab="<?php echo flm_e($tab); ?>" aria-selected="<?php echo 'policy' === $tab ? 'true' : 'false'; ?>"><?php echo flm_e($label); ?></button>
+              </li>
+            <?php endforeach; ?>
+          </ul>
 
-          <fieldset class="flm-channel-section">
-            <legend>通用 Webhook</legend>
+          <section class="flm-notification-panel" data-flm-notification-panel="policy">
+            <div class="flm-section-head">
+              <div>
+                <h3>通知策略</h3>
+                <p>通知事件先写入 Outbox，再由 Worker 异步投递；渠道故障不会影响健康检测结果。</p>
+              </div>
+            </div>
+            <p><label class="flm-check"><input type="checkbox" name="notifications_enabled" value="1"<?php echo $settings['notifications_enabled'] ? ' checked' : ''; ?>> 启用通知</label></p>
+            <div class="flm-trigger-options">
+              <p><label class="flm-check"><input type="checkbox" name="notify_on_down" value="1"<?php echo $settings['notify_on_down'] ? ' checked' : ''; ?>> 站点确认不可用时通知</label></p>
+              <p><label class="flm-check"><input type="checkbox" name="notify_on_recovery" value="1"<?php echo $settings['notify_on_recovery'] ? ' checked' : ''; ?>> 异常恢复正常时通知</label></p>
+              <p><label class="flm-check"><input type="checkbox" name="notify_on_warning" value="1"<?php echo $settings['notify_on_warning'] ? ' checked' : ''; ?>> 预警或不稳定时通知</label></p>
+            </div>
+            <label for="flm-notification-cooldown">同类通知冷却时间（秒）</label>
+            <input id="flm-notification-cooldown" type="number" name="notification_cooldown" min="300" max="604800" value="<?php echo (int) $settings['notification_cooldown']; ?>">
+            <p class="flm-help">同一友链、同一事件和同一渠道在冷却时间内只创建一条通知，默认 3600 秒。</p>
+            <button class="btn" type="submit" formaction="<?php echo flm_e(flm_action_url('dispatch-notifications')); ?>" formnovalidate<?php echo empty($settings['notifications_enabled']) ? ' disabled' : ''; ?>>立即处理队列</button>
+          </section>
+
+          <section class="flm-notification-panel" data-flm-notification-panel="webhook" hidden>
+            <div class="flm-section-head"><div><h3>通用 Webhook</h3><p>向 HTTPS 接口投递签名 JSON。</p></div></div>
             <p><label class="flm-check"><input type="checkbox" name="webhook_enabled" value="1"<?php echo $settings['webhook_enabled'] ? ' checked' : ''; ?>> 启用通用 Webhook</label></p>
             <label for="flm-webhook-url">HTTPS 地址</label>
             <input id="flm-webhook-url" type="password" name="webhook_url" value="" autocomplete="new-password" placeholder="<?php echo $settings['webhook_url'] ? '已配置，留空保持不变' : 'https://hooks.example.com/friendlinks'; ?>">
@@ -67,10 +78,11 @@ $placeholders = array_map(static function ($name) {
               <label class="flm-check"><input type="checkbox" name="clear_webhook_url" value="1"> 清除已保存的地址</label>
               <label class="flm-check"><input type="checkbox" name="clear_webhook_secret" value="1"> 清除已保存的密钥</label>
             </div>
-          </fieldset>
+            <button class="btn" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'webhook'])); ?>" formnovalidate<?php echo empty($settings['webhook_enabled']) ? ' disabled' : ''; ?>>测试已保存配置</button>
+          </section>
 
-          <fieldset class="flm-channel-section">
-            <legend>钉钉机器人</legend>
+          <section class="flm-notification-panel" data-flm-notification-panel="dingtalk" hidden>
+            <div class="flm-section-head"><div><h3>钉钉机器人</h3><p>支持钉钉自定义机器人的加签安全模式。</p></div></div>
             <p><label class="flm-check"><input type="checkbox" name="dingtalk_enabled" value="1"<?php echo $settings['dingtalk_enabled'] ? ' checked' : ''; ?>> 启用钉钉机器人</label></p>
             <label for="flm-dingtalk-url">机器人 Webhook 地址</label>
             <input id="flm-dingtalk-url" type="password" name="dingtalk_webhook_url" value="" autocomplete="new-password" placeholder="<?php echo $settings['dingtalk_webhook_url'] ? '已配置，留空保持不变' : 'https://oapi.dingtalk.com/robot/send?access_token=...'; ?>">
@@ -80,10 +92,11 @@ $placeholders = array_map(static function ($name) {
               <label class="flm-check"><input type="checkbox" name="clear_dingtalk_webhook_url" value="1"> 清除已保存的地址</label>
               <label class="flm-check"><input type="checkbox" name="clear_dingtalk_secret" value="1"> 清除已保存的密钥</label>
             </div>
-          </fieldset>
+            <button class="btn" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'dingtalk'])); ?>" formnovalidate<?php echo empty($settings['dingtalk_enabled']) ? ' disabled' : ''; ?>>测试已保存配置</button>
+          </section>
 
-          <fieldset class="flm-channel-section">
-            <legend>SMTP 邮件</legend>
+          <section class="flm-notification-panel" data-flm-notification-panel="email" hidden>
+            <div class="flm-section-head"><div><h3>SMTP 邮件</h3><p>支持 STARTTLS、SMTPS 和不加密连接，始终校验证书。</p></div></div>
             <p><label class="flm-check"><input type="checkbox" name="email_enabled" value="1"<?php echo $settings['email_enabled'] ? ' checked' : ''; ?>> 启用 SMTP 邮件</label></p>
             <div class="flm-field-grid flm-field-grid-three">
               <div class="flm-field">
@@ -121,39 +134,23 @@ $placeholders = array_map(static function ($name) {
             <label for="flm-email-recipients">收件地址</label>
             <input id="flm-email-recipients" type="text" name="email_recipients" value="<?php echo flm_e($settings['email_recipients']); ?>" placeholder="admin@example.com, ops@example.com">
             <p class="flm-help">最多 20 个地址，使用逗号、分号或空格分隔。SMTP 始终校验证书，不提供关闭验证的选项。</p>
-          </fieldset>
+            <button class="btn" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'email'])); ?>" formnovalidate<?php echo empty($settings['email_enabled']) ? ' disabled' : ''; ?>>测试已保存配置</button>
+          </section>
 
-          <fieldset class="flm-channel-section">
-            <legend>消息模板</legend>
+          <section class="flm-notification-panel" data-flm-notification-panel="template" hidden>
+            <div class="flm-section-head"><div><h3>消息模板</h3><p>三个通知渠道共享同一套纯文本模板。</p></div></div>
             <label for="flm-notification-subject">标题模板</label>
             <input id="flm-notification-subject" type="text" name="notification_subject_template" maxlength="240" value="<?php echo flm_e($settings['notification_subject_template']); ?>">
             <label for="flm-notification-message">正文模板</label>
             <textarea id="flm-notification-message" name="notification_message_template" rows="9"><?php echo flm_e($settings['notification_message_template']); ?></textarea>
             <p class="flm-help">支持变量：<code><?php echo flm_e(implode('  ', $placeholders)); ?></code></p>
             <p class="flm-help">模板仅执行变量替换，不执行 HTML、PHP 或表达式。邮件和钉钉均发送纯文本。</p>
-          </fieldset>
+          </section>
 
           <div class="flm-form-actions">
             <button class="btn primary" type="submit">保存通知设置</button>
           </div>
         </form>
-
-        <div class="flm-section-head">
-          <div>
-            <h3>渠道测试</h3>
-            <p>测试使用已保存配置和当前消息模板，不写入投递记录。</p>
-          </div>
-        </div>
-        <div class="flm-inline flm-test-actions">
-          <?php foreach ($channelLabels as $channel => $label): ?>
-            <form method="post" action="<?php echo flm_e(flm_action_url('test-notification', ['channel' => $channel])); ?>">
-              <button class="btn" type="submit"<?php echo empty($settings[$channel . '_enabled']) ? ' disabled' : ''; ?>>测试<?php echo flm_e($label); ?></button>
-            </form>
-          <?php endforeach; ?>
-          <form method="post" action="<?php echo flm_e(flm_action_url('dispatch-notifications')); ?>">
-            <button class="btn" type="submit"<?php echo empty($settings['notifications_enabled']) ? ' disabled' : ''; ?>>立即处理队列</button>
-          </form>
-        </div>
 
         <div class="flm-section-head flm-section-head-list">
           <div>
@@ -163,7 +160,7 @@ $placeholders = array_map(static function ($name) {
         </div>
         <div class="typecho-table-wrap">
           <table class="typecho-list-table">
-            <thead><tr><th>时间</th><th>友链/事件</th><th>渠道</th><th>状态</th><th>尝试</th><th>结果</th><th>操作</th></tr></thead>
+            <thead><tr><th class="kit-hidden-mb">时间</th><th>友链/事件</th><th>渠道</th><th>状态</th><th class="kit-hidden-mb">尝试</th><th class="kit-hidden-mb">结果</th><th>操作</th></tr></thead>
             <tbody>
             <?php if (!$notifications): ?>
               <tr><td colspan="7">暂无通知记录。</td></tr>
@@ -174,12 +171,12 @@ $placeholders = array_map(static function ($name) {
                 $isFailed = 'failed' === $status;
                 ?>
                 <tr>
-                  <td><?php echo flm_e(date('Y-m-d H:i', (int) $notification['created_at'])); ?></td>
+                  <td class="kit-hidden-mb"><?php echo flm_e(date('Y-m-d H:i', (int) $notification['created_at'])); ?></td>
                   <td><strong><?php echo flm_e($notification['link_name'] ?: '测试通知'); ?></strong><br><small><?php echo flm_e($eventLabels[$notification['event_type']] ?? $notification['event_type']); ?></small></td>
                   <td><?php echo flm_e($channelLabels[$notification['channel']] ?? $notification['channel']); ?></td>
                   <td class="<?php echo $isFailed ? 'flm-state-down' : ''; ?>"><?php echo flm_e($statusLabels[$status] ?? $status); ?></td>
-                  <td><?php echo (int) $notification['attempts']; ?>/5</td>
-                  <td><small><?php echo flm_e($notification['last_error'] ?: ($notification['sent_at'] ? date('Y-m-d H:i', (int) $notification['sent_at']) : '—')); ?></small></td>
+                  <td class="kit-hidden-mb"><?php echo (int) $notification['attempts']; ?>/5</td>
+                  <td class="kit-hidden-mb"><small><?php echo flm_e($notification['last_error'] ?: ($notification['sent_at'] ? date('Y-m-d H:i', (int) $notification['sent_at']) : '—')); ?></small></td>
                   <td>
                     <?php if ($isFailed): ?>
                       <form method="post" action="<?php echo flm_e(flm_action_url('retry-notification', ['id' => (int) $notification['id']])); ?>">

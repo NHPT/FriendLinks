@@ -65,19 +65,30 @@ $categories = $repositories->categories();
           </div>
           <div class="typecho-table-wrap">
             <table class="typecho-list-table">
-              <thead><tr><th width="4%"><input type="checkbox" class="typecho-table-select-all" aria-label="全选友链"></th><th>名称</th><th class="kit-hidden-mb">分类</th><th>状态</th><th class="kit-hidden-mb">最近检测</th><th class="kit-hidden-mb">排序</th></tr></thead>
+              <thead><tr><th width="4%"><input type="checkbox" class="typecho-table-select-all" aria-label="全选友链"></th><th>名称</th><th class="kit-hidden-mb">分类</th><th>状态</th><th class="kit-hidden-mb">最近检测</th><th class="kit-hidden-mb">排序</th><th>操作</th></tr></thead>
               <tbody>
               <?php if (!$links): ?>
-                <tr><td colspan="6"><h6 class="typecho-list-table-title">暂无友链</h6></td></tr>
+                <tr><td colspan="7"><h6 class="typecho-list-table-title">暂无友链</h6></td></tr>
               <?php endif; ?>
               <?php foreach ($links as $link): ?>
                 <tr id="friend-link-<?php echo (int) $link['id']; ?>">
                   <td><input type="checkbox" name="id[]" value="<?php echo (int) $link['id']; ?>" aria-label="选择 <?php echo flm_e($link['name']); ?>"></td>
-                  <td><a href="<?php echo flm_e(flm_panel_url('link-edit', ['id' => (int) $link['id']])); ?>"><strong><?php echo flm_e($link['name']); ?></strong></a><br><small><?php echo flm_e($link['url']); ?></small></td>
+                  <td><strong><?php echo flm_e($link['name']); ?></strong><br><small><?php echo flm_e($link['url']); ?></small></td>
                   <td class="kit-hidden-mb"><?php echo flm_e($link['category_name'] ?: '未分类'); ?></td>
                   <td><span class="flm-state flm-state-<?php echo flm_e($link['overall_state'] ?: 'pending'); ?>"><?php echo flm_e(StatusLabels::state($link['overall_state'] ?: 'pending')); ?></span></td>
                   <td class="kit-hidden-mb"><?php echo $link['checked_at'] ? flm_e(date('Y-m-d H:i', (int) $link['checked_at'])) : '尚未检测'; ?></td>
                   <td class="kit-hidden-mb"><?php echo (int) $link['sort_order']; ?></td>
+                  <td>
+                    <div class="flm-row-actions">
+                      <a class="btn btn-s" href="<?php echo flm_e(flm_panel_url('link-edit', ['id' => (int) $link['id']])); ?>">编辑</a>
+                      <button
+                        class="btn btn-s btn-warn"
+                        type="submit"
+                        formaction="<?php echo flm_e(flm_action_url('delete-link', ['link_id' => (int) $link['id']])); ?>"
+                        onclick="return confirm('确认永久删除此友链及其检测记录？')"
+                      >删除</button>
+                    </div>
+                  </td>
                 </tr>
               <?php endforeach; ?>
               </tbody>

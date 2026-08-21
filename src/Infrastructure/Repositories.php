@@ -259,6 +259,27 @@ final class Repositories
         return $count;
     }
 
+    public function deleteLink(int $id): bool
+    {
+        if ($id < 1) {
+            return false;
+        }
+
+        return $this->database->transaction(function () use ($id) {
+            if (!$this->database->fetchRowWrite(
+                $this->db->select('id')->from('table.flm_links')->where('id = ?', $id)->limit(1)
+            )) {
+                return false;
+            }
+
+            $this->db->query($this->db->delete('table.flm_notification_outbox')->where('link_id = ?', $id));
+            $this->db->query($this->db->delete('table.flm_check_history')->where('link_id = ?', $id));
+            $this->db->query($this->db->delete('table.flm_current_status')->where('link_id = ?', $id));
+            $this->db->query($this->db->delete('table.flm_links')->where('id = ?', $id));
+            return true;
+        });
+    }
+
     public function schedule(array $ids, bool $full = false): int
     {
         $count = 0;

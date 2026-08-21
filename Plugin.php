@@ -20,9 +20,9 @@ require_once __DIR__ . '/vendor/autoload.php';
  *
  * @package FriendLinks
  * @author NHPT
- * @version 0.2.2
+ * @version 0.2.3
  * @since 1.2.0
- * @link https://github.com/NHPT
+ * @link https://github.com/NHPT/FriendLinks
  */
 final class Plugin implements PluginInterface
 {
@@ -96,12 +96,42 @@ final class Plugin implements PluginInterface
 
     public static function config(Form $form)
     {
+        $uninstallUrl = \Widget\Security::alloc()->getIndex('/action/friendlinks?do=uninstall');
         $layout = new Layout();
         $layout->html(
-            '<p>FriendLinks 是包含管理、检测和历史记录的独立工具，请通过专用菜单操作。</p>'
-            . '<p><a class="btn primary" href="' . htmlspecialchars(Helper::url(self::PANELS[7]), ENT_QUOTES, 'UTF-8')
+            '<style>'
+            . '.typecho-page-main form[action*="plugins-edit"] .typecho-option-submit{display:none}'
+            . '.flm-config-link,.flm-config-uninstall{align-items:center;box-sizing:border-box;display:inline-flex;'
+            . 'justify-content:center;line-height:1}'
+            . '.flm-config-danger{border-top:1px solid #d9d9d6;margin-top:28px;padding-top:16px}'
+            . '.flm-config-danger input{box-sizing:border-box;display:block;margin:6px 0 10px;max-width:360px;width:100%}'
+            . '</style>'
+            . '<p>FriendLinks 是包含管理、检测和历史记录的独立工具，请通过专用菜单操作。</p>'
+            . '<p><a class="btn primary flm-config-link" href="'
+            . htmlspecialchars(Helper::url(self::PANELS[7]), ENT_QUOTES, 'UTF-8')
             . '">打开 FriendLinks 设置</a></p>'
-            . '<p>停用插件不会删除业务数据；删除数据必须在专用设置页中二次确认。</p>'
+            . '<p>停用插件不会删除业务数据。</p>'
+            . '<div class="flm-config-danger"><h3>卸载并删除数据</h3>'
+            . '<p>此操作会永久删除友链、分类、检测历史、运行记录和通知记录。</p>'
+            . '<label for="flm-config-delete-confirmation">输入 DELETE 确认</label>'
+            . '<input id="flm-config-delete-confirmation" type="text" name="confirmation" '
+            . 'form="flm-uninstall-form" autocomplete="off">'
+            . '<button id="flm-config-uninstall" class="btn btn-warn flm-config-uninstall" '
+            . 'type="submit" form="flm-uninstall-form" disabled>停用插件并删除数据</button></div>'
+            . '<script>(function(){function init(){'
+            . 'var input=document.getElementById("flm-config-delete-confirmation");'
+            . 'var button=document.getElementById("flm-config-uninstall");'
+            . 'if(!input||!button||document.getElementById("flm-uninstall-form"))return;'
+            . 'var target=document.createElement("form");target.id="flm-uninstall-form";'
+            . 'target.method="post";target.action='
+            . json_encode($uninstallUrl, JSON_UNESCAPED_SLASHES)
+            . ';target.style.display="none";document.body.appendChild(target);'
+            . 'input.addEventListener("input",function(){button.disabled=input.value!=="DELETE";});'
+            . 'target.addEventListener("submit",function(event){'
+            . 'if(input.value!=="DELETE"||!confirm("此操作会永久删除所有 FriendLinks 数据。继续？"))'
+            . '{event.preventDefault();}});}'
+            . 'if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",init);}else{init();}'
+            . '}());</script>'
         );
         $form->addItem($layout);
 
@@ -194,16 +224,37 @@ final class Plugin implements PluginInterface
                 $parents = is_array($panelTable['parent'] ?? null) ? $panelTable['parent'] : [];
                 $children = is_array($panelTable['child'] ?? null) ? $panelTable['child'] : [];
                 $files = is_array($panelTable['file'] ?? null) ? $panelTable['file'] : [];
+                foreach ($parents as $parentIndex => $name) {
+                    if (self::MENU_NAME === (string) $name) {
+                        $ownedMenuIndexes[(int) $parentIndex + 10] = true;
+                    }
+                }
 
+                $detectedMenuIndexes = [];
+                $removedPanelFiles = [];
                 foreach ($children as $menuIndex => $items) {
                     if (!is_array($items)) {
                         continue;
                     }
+                    if (isset($ownedMenuIndexes[(int) $menuIndex])) {
+                        foreach ($items as $item) {
+                            $file = self::panelFileFromReference(
+                                is_array($item) ? (string) ($item[2] ?? '') : ''
+                            );
+                            if ('' !== $file) {
+                                $removedPanelFiles[$file] = true;
+                            }
+                        }
+                        unset($children[$menuIndex]);
+                        continue;
+                    }
+
                     $remaining = [];
                     foreach ($items as $item) {
                         $url = is_array($item) ? (string) ($item[2] ?? '') : '';
                         if (self::isOwnPanelReference($url)) {
-                            $ownedMenuIndexes[(int) $menuIndex] = true;
+                            $detectedMenuIndexes[(int) $menuIndex] = true;
+                            $removedPanelFiles[self::panelFileFromReference($url)] = true;
                             continue;
                         }
                         $remaining[] = $item;
@@ -218,8 +269,8 @@ final class Plugin implements PluginInterface
                 foreach ($parents as $parentIndex => $name) {
                     $menuIndex = (int) $parentIndex + 10;
                     if (
-                        (isset($ownedMenuIndexes[$menuIndex]) && empty($children[$menuIndex]))
-                        || (self::MENU_NAME === (string) $name && empty($children[$menuIndex]))
+                        isset($ownedMenuIndexes[$menuIndex])
+                        || (isset($detectedMenuIndexes[$menuIndex]) && empty($children[$menuIndex]))
                     ) {
                         unset($parents[$parentIndex]);
                     }
@@ -229,8 +280,10 @@ final class Plugin implements PluginInterface
                 $panelTable['child'] = $children;
                 $panelTable['file'] = array_values(array_filter(
                     $files,
-                    static function ($file) {
-                        return !self::isOwnPanelReference((string) $file);
+                    static function ($file) use ($removedPanelFiles) {
+                        $normalized = self::panelFileFromReference((string) $file);
+                        return !isset($removedPanelFiles[$normalized])
+                            && !self::isOwnPanelReference((string) $file);
                     }
                 ));
                 $value = serialize($panelTable);
@@ -257,6 +310,19 @@ final class Plugin implements PluginInterface
 
     private static function isOwnPanelReference(string $reference): bool
     {
+        return 0 === strpos(self::panelFileFromReference($reference), 'FriendLinks/panel/');
+    }
+
+    private static function panelFileFromReference(string $reference): string
+    {
+        $reference = html_entity_decode($reference, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $query = parse_url($reference, PHP_URL_QUERY);
+        if (is_string($query)) {
+            parse_str($query, $parameters);
+            if (isset($parameters['panel']) && is_string($parameters['panel'])) {
+                $reference = $parameters['panel'];
+            }
+        }
         for ($attempt = 0; $attempt < 3; $attempt++) {
             $decoded = rawurldecode($reference);
             if ($decoded === $reference) {
@@ -264,6 +330,6 @@ final class Plugin implements PluginInterface
             }
             $reference = $decoded;
         }
-        return false !== strpos($reference, 'FriendLinks/panel/');
+        return trim($reference, '/');
     }
 }

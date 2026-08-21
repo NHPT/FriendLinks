@@ -9,6 +9,7 @@ if (!$root || !is_file($root . '/config.inc.php')) {
 require $root . '/config.inc.php';
 \Widget\Init::alloc();
 require dirname(__DIR__) . '/Plugin.php';
+require dirname(__DIR__) . '/Action.php';
 
 use Typecho\Db;
 use Typecho\Plugin as TypechoPluginRegistry;
@@ -24,6 +25,7 @@ use TypechoPlugin\FriendLinks\Infrastructure\Repositories;
 use TypechoPlugin\FriendLinks\Plugin;
 use TypechoPlugin\FriendLinks\Presentation\Renderer;
 use TypechoPlugin\FriendLinks\Presentation\TemplateCatalog;
+use Widget\Base\Options as OptionsWidget;
 
 $assertions = 0;
 $check = static function ($condition, string $message) use (&$assertions): void {
@@ -43,6 +45,10 @@ $check(
     '独立的 Typecho 友情链接管理、展示、健康检测与通知插件。' === $pluginInfo['description'],
     'plugin description is Chinese'
 );
+$check(
+    'https://github.com/NHPT/FriendLinks' === $pluginInfo['homepage'],
+    'plugin homepage points to the FriendLinks repository'
+);
 $configForm = new Form();
 Plugin::config($configForm);
 $configInputs = $configForm->getInputs();
@@ -61,6 +67,42 @@ $configHtml = (string) ob_get_clean();
 $check(
     false === strpos($configHtml, (string) $storedSettings['worker_secret']),
     'plugin config page does not render stored secrets'
+);
+$check(
+    false !== strpos($configHtml, 'flm-config-link'),
+    'plugin config page renders the vertically centered settings link'
+);
+$check(
+    false !== strpos($configHtml, 'flm-config-delete-confirmation')
+        && false !== strpos($configHtml, 'typecho-option-submit{display:none}'),
+    'plugin config page replaces the save control with explicit uninstall confirmation'
+);
+$check(
+    is_subclass_of(\FriendLinks_Action::class, OptionsWidget::class),
+    'plugin action initializes Typecho user, security, options, and database components'
+);
+$linkEditPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/link-edit.php');
+$linksPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/links.php');
+$categoriesPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/categories.php');
+$settingsPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/settings.php');
+$check(
+    false !== strpos($linkEditPanel, "StatusLabels::state(\$link['overall_state'])")
+        && false !== strpos($linkEditPanel, "date('Y-m-d H:i:s', (int) \$link['checked_at'])")
+        && false === strpos($linkEditPanel, "json_decode(\$link['details_json']")
+        && false === strpos($linkEditPanel, "StatusLabels::reason(\$link['reason_code'])"),
+    'link editor shows only the state label and checked time'
+);
+$check(
+    false !== strpos($linksPanel, "confirm('确认永久删除此友链及其检测记录？')"),
+    'link deletion requires confirmation'
+);
+$check(
+    false !== strpos($categoriesPanel, "confirm('删除分类后，原友链将转为未分类。继续？')"),
+    'category deletion requires confirmation'
+);
+$check(
+    false === strpos($settingsPanel, "\$settings['worker_secret']"),
+    'settings page does not render the HTTP Worker secret'
 );
 
 $migration = new MigrationManager();
@@ -545,6 +587,53 @@ $check(
     'changing a link target clears stale status, invalidates the old lease, and schedules a fresh check'
 );
 
+$deleteLinkId = $service->save([
+    'name' => 'Delete integration link',
+    'url' => 'https://delete.example.com/',
+    'description' => '',
+    'logo_url' => '',
+    'category_id' => 0,
+    'sort_order' => 0,
+    'visibility' => 'published',
+    'check_enabled' => 0,
+]);
+$db->query($db->insert('table.flm_check_history')->rows([
+    'link_id' => $deleteLinkId,
+    'run_id' => str_repeat('9', 32),
+    'overall_state' => 'disabled',
+    'reason_code' => null,
+    'http_code' => null,
+    'response_time_ms' => null,
+    'started_at' => time(),
+    'finished_at' => time(),
+    'details_json' => '{}',
+]));
+$repositories->enqueueNotifications([[
+    'event_key' => hash('sha256', 'delete-link-notification'),
+    'link_id' => $deleteLinkId,
+    'event_type' => 'warning',
+    'channel' => 'email',
+    'subject' => 'Delete link notification',
+    'message' => 'Delete link notification',
+    'payload_json' => '{}',
+    'status' => 'pending',
+    'attempts' => 0,
+    'available_at' => time(),
+    'lease_token' => null,
+    'lease_until' => null,
+    'last_error' => null,
+    'created_at' => time(),
+    'sent_at' => null,
+    '_cooldown' => 0,
+]]);
+$check($repositories->deleteLink($deleteLinkId), 'link can be permanently deleted');
+$check(null === $repositories->link($deleteLinkId), 'deleted link is no longer available');
+$check([] === $repositories->history(10, $deleteLinkId), 'deleting a link removes its history');
+$deleteNotifications = array_filter($repositories->notifications(100), static function ($notification) use ($deleteLinkId) {
+    return (int) $notification['link_id'] === $deleteLinkId;
+});
+$check(!$deleteNotifications, 'deleting a link removes its notification outbox rows');
+
 if (getenv('KEEP_TYPECHO_FIXTURE')) {
     $db->query($db->update('table.options')
         ->rows(['value' => serialize(TypechoPluginRegistry::export())])
@@ -562,6 +651,19 @@ Settings::save($settings);
 $panelRow = $db->fetchRow($db->select('value')->from('table.options')
     ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
 $panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
+$currentMenuIndexRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_menu_index')->where('user = ?', 0)->limit(1));
+$currentMenuIndex = (int) $currentMenuIndexRow['value'];
+$foreignPanel = rawurlencode('Legacy/missing.php');
+$panelTable['child'][$currentMenuIndex][] = [
+    '遗留页面',
+    '遗留页面',
+    'extending.php?panel=' . $foreignPanel,
+    'administrator',
+    false,
+    '',
+];
+$panelTable['file'][] = $foreignPanel;
 $panelTable['parent'][] = '友情链接';
 $staleParentIndex = array_key_last($panelTable['parent']);
 $staleMenuIndex = (int) $staleParentIndex + 10;
@@ -602,6 +704,12 @@ $check(
         return false !== strpos($reference, 'FriendLinks/panel/');
     }),
     'deactivation removes FriendLinks child panels and access whitelist entries'
+);
+$check(
+    !array_filter($remainingPanelReferences, static function ($reference) {
+        return false !== strpos($reference, 'Legacy/missing.php');
+    }),
+    'deactivation removes unknown historical panels from the owned menu index'
 );
 $menuIndexRow = $db->fetchRow($db->select('value')->from('table.options')
     ->where('name = ?', 'friendlinks_menu_index')->where('user = ?', 0)->limit(1));

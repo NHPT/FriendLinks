@@ -2,7 +2,6 @@
 
 use Typecho\Common;
 use Typecho\Db;
-use Typecho\Widget;
 use TypechoPlugin\FriendLinks\Application\ImportService;
 use TypechoPlugin\FriendLinks\Application\LinkService;
 use TypechoPlugin\FriendLinks\Application\NotificationDispatcher;
@@ -13,11 +12,12 @@ use TypechoPlugin\FriendLinks\Infrastructure\Repositories;
 use TypechoPlugin\FriendLinks\Infrastructure\WorkerSigner;
 use Utils\Helper;
 use Widget\ActionInterface;
+use Widget\Base\Options as OptionsWidget;
 use Widget\Notice;
 
 require_once __DIR__ . '/vendor/autoload.php';
 
-class FriendLinks_Action extends Widget implements ActionInterface
+class FriendLinks_Action extends OptionsWidget implements ActionInterface
 {
     public function action()
     {
@@ -31,6 +31,9 @@ class FriendLinks_Action extends Widget implements ActionInterface
                     break;
                 case 'archive-links':
                     $this->archiveLinks();
+                    break;
+                case 'delete-link':
+                    $this->deleteLink();
                     break;
                 case 'schedule':
                     $this->schedule();
@@ -118,7 +121,8 @@ class FriendLinks_Action extends Widget implements ActionInterface
     private function saveLink(): void
     {
         $id = max(0, (int) $this->request->get('id', 0));
-        $saved = (new LinkService())->save([
+        $repositories = new Repositories();
+        $saved = (new LinkService($repositories))->save([
             'name' => $this->request->get('name', ''),
             'url' => $this->request->get('url', ''),
             'description' => $this->request->get('description', ''),
@@ -128,8 +132,26 @@ class FriendLinks_Action extends Widget implements ActionInterface
             'visibility' => $this->request->get('visibility', 'published'),
             'check_enabled' => $this->request->get('check_enabled', 0),
         ], $id);
-        Notice::alloc()->set($id > 0 ? '友链已更新。' : '友链已创建并等待检测。', 'success');
+        $link = $repositories->link($saved);
+        $message = $id > 0 ? '友链已更新。' : '友链已创建。';
+        $noticeType = 'success';
+        if ($link && !empty($link['check_enabled']) && 'published' === $link['visibility']) {
+            $repositories->schedule([$saved], true);
+            $result = (new Worker($repositories))->run('admin', 1, 30, [$saved]);
+            if ($result['completed'] > 0) {
+                $message = ($id > 0 ? '友链已更新' : '友链已创建') . '并完成检测。';
+            } else {
+                $message = ($id > 0 ? '友链已更新' : '友链已创建')
+                    . '，但即时检测未完成，请查看健康页运行摘要。';
+                $noticeType = 'notice';
+            }
+        }
+        Notice::alloc()->set($message, $noticeType);
         Notice::alloc()->highlight('friend-link-' . $saved);
+        $this->response->redirect(Common::url(
+            'extending.php?panel=FriendLinks/panel/link-edit.php&id=' . $saved,
+            $this->options->adminUrl
+        ));
     }
 
     private function archiveLinks(): void
@@ -139,14 +161,38 @@ class FriendLinks_Action extends Widget implements ActionInterface
         Notice::alloc()->set('已归档 ' . $count . ' 条友链。', 'success');
     }
 
+    private function deleteLink(): void
+    {
+        $id = (int) $this->request->get('link_id', 0);
+        if (!(new Repositories())->deleteLink($id)) {
+            throw new InvalidArgumentException('友链不存在。');
+        }
+        Notice::alloc()->set('友链及其检测记录已删除。', 'success');
+    }
+
     private function schedule(): void
     {
         $ids = $this->request->getArray('id');
         if (!$ids && $this->request->get('id')) {
             $ids = [(int) $this->request->get('id')];
         }
-        $count = (new Repositories())->schedule($ids, '1' === (string) $this->request->get('full', '0'));
-        Notice::alloc()->set('已安排 ' . $count . ' 条友链等待 Worker 检测。', 'success');
+        $ids = array_values(array_filter(array_unique(array_map('intval', $ids)), static function ($id) {
+            return $id > 0;
+        }));
+        if (!$ids) {
+            throw new InvalidArgumentException('请先选择需要检测的友链。');
+        }
+        $repositories = new Repositories();
+        $count = $repositories->schedule($ids, '1' === (string) $this->request->get('full', '0'));
+        if ($count < 1) {
+            throw new InvalidArgumentException('没有可检测的友链。');
+        }
+        $result = (new Worker($repositories))->run('admin', min(20, count($ids)), 30, $ids);
+        Notice::alloc()->set(
+            '已检测 ' . $result['completed'] . ' 条'
+                . ($result['failed'] > 0 ? '，失败 ' . $result['failed'] . ' 条。' : '。'),
+            $result['failed'] > 0 || $result['completed'] < $count ? 'notice' : 'success'
+        );
     }
 
     private function saveCategory(): void

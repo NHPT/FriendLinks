@@ -94,7 +94,7 @@ Logo 方阵用于更强调站点标识的页面：隐藏描述，右上角仅保
 */5 * * * * php /path/to/typecho/usr/plugins/FriendLinks/bin/console.php check --due --limit=50 --max-seconds=240
 ```
 
-CLI Worker 只领取已到期任务。后台“立即检测”和“完整复检”只调整调度时间，不会在后台页面请求中同步访问远端站点。
+CLI Worker 只领取已到期任务。保存已启用自动检测的公开友链时，后台会立即检测该友链；列表中的“立即检测”和“完整复检”也会在当前后台请求中执行所选友链。批量检测受 30 秒运行预算限制，未完成部分仍保留为到期任务，随后由 Cron 或 HTTP Worker 继续处理。
 
 配置 Cron 前先在终端手动执行一次。成功时输出一行 JSON，包含 `claimed`、`completed`、`failed` 和 `notifications`；核心检测全部失败时返回非零退出码。Cron 应使用与站点一致的 PHP CLI 可执行文件，并保留错误日志，例如：
 
@@ -106,7 +106,7 @@ CLI Worker 只领取已到期任务。后台“立即检测”和“完整复检
 
 ### 签名 HTTP Worker
 
-无法使用系统 Cron 时，可以调用设置页显示的 HTTP Worker。该入口只接受 HTTPS `POST`，并要求：
+无法使用系统 Cron 时，可以调用设置页显示的 HTTP Worker 入口。该入口只接受 HTTPS `POST`，并要求：
 
 ```text
 X-FLM-Timestamp
@@ -124,7 +124,7 @@ Unix 时间戳
 SHA-256(请求体)
 ```
 
-使用设置页生成的密钥计算 HMAC-SHA256。时间窗口为 5 分钟，同一 nonce 只能使用一次。HTTP Worker 单次最多处理 5 条友链，目标运行预算为 20 秒。
+使用插件生成并保存在服务端的密钥计算 HMAC-SHA256。密钥不会回显到后台页面源码中；需要变更时在设置页轮换。时间窗口为 5 分钟，同一 nonce 只能使用一次。HTTP Worker 单次最多处理 5 条友链，目标运行预算为 20 秒。
 
 `request path` 只取 Worker URL 的路径部分，不包含域名和查询串；签名输出为 64 位小写十六进制字符串。请求体可以使用空 JSON 对象。下面的 PHP 示例可直接放入定时脚本：
 
@@ -132,7 +132,7 @@ SHA-256(请求体)
 <?php
 
 $workerUrl = 'https://blog.example.com/index.php/friendlinks/worker';
-$secret = '设置页显示的 Worker 密钥';
+$secret = getenv('FRIENDLINKS_WORKER_SECRET');
 $body = '{}';
 $timestamp = time();
 $nonce = bin2hex(random_bytes(16));
@@ -307,6 +307,8 @@ HTTP Worker 的目标预算较短；收件人较多或 SMTP 响应较慢时，Di
 
 ### 消息模板
 
+“友情链接 → 通知”使用“通知策略、Webhook、钉钉机器人、SMTP 邮件、消息模板”内层标签。每个渠道的测试按钮位于对应渠道标签中；消息模板由三个渠道共享，因此单独放在“消息模板”标签中。
+
 标题和正文可以修改，支持以下占位符：
 
 | 占位符 | 内容 |
@@ -407,7 +409,7 @@ flm_notification_outbox
 
 - 停用：移除菜单、路由、Action 和前端钩子，保留表、友链、历史及通知配置。
 - 再启用：自动恢复停用前配置并继续使用原数据。
-- 显式卸载：在专用设置页输入 `DELETE` 后，才删除插件表和配置。
+- 显式卸载：在 Typecho“控制台 → 插件 → FriendLinks 设置”中输入 `DELETE` 后，才删除插件表和配置。
 
 MySQL 插件表必须全部使用 InnoDB，以保证检测结果、历史和通知事件的事务一致性。
 
@@ -465,7 +467,7 @@ TYPECHO_TEST_ROOT=/path/to/typecho php tests/typecho-integration.php
 
 ### 后台点击“立即检测”后状态没有变化
 
-该操作只把任务标记为到期。请确认系统 Cron 或签名 HTTP Worker 正常运行。
+后台会立即执行所选友链，并在完成后显示结果。批量任务超过 30 秒运行预算时，剩余任务会继续保持到期状态；请确认系统 Cron 或签名 HTTP Worker 正常运行以处理剩余任务。
 
 ### 服务器缺少 cURL
 
@@ -475,7 +477,7 @@ TYPECHO_TEST_ROOT=/path/to/typecho php tests/typecho-integration.php
 
 这是有意的数据保护设计。升级、排错或临时停用不应删除友链。只有显式卸载操作才会删除数据。
 
-永久删除前，先在“友情链接 → 导入导出”导出 JSON 备份，再进入“友情链接 → 设置 → 卸载并删除数据”，输入 `DELETE` 并确认。该操作会永久删除友链、分类、检测历史、运行记录和通知记录，无法从插件内恢复。
+永久删除前，先在“友情链接 → 导入导出”导出 JSON 备份，再进入 Typecho“控制台 → 插件 → FriendLinks 设置”，输入 `DELETE` 并确认。该操作会永久删除友链、分类、检测历史、运行记录和通知记录，无法从插件内恢复。
 
 ### 为什么通知没有立即发送
 

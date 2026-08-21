@@ -50,11 +50,19 @@ final class Worker
         $this->notificationDispatcher = $notificationDispatcher ?: new NotificationDispatcher($this->repositories);
     }
 
-    public function run(string $mode = 'cli', int $limit = 50, int $maxSeconds = 240): array
+    public function run(string $mode = 'cli', int $limit = 50, int $maxSeconds = 240, array $linkIds = []): array
     {
-        $mode = 'http' === $mode ? 'http' : 'cli';
-        $limit = max(1, min('http' === $mode ? 5 : 500, $limit));
-        $maxSeconds = max(1, min('http' === $mode ? 20 : 3600, $maxSeconds));
+        $mode = in_array($mode, ['http', 'admin'], true) ? $mode : 'cli';
+        $limitCap = 'http' === $mode ? 5 : ('admin' === $mode ? 20 : 500);
+        $secondsCap = 'http' === $mode ? 20 : ('admin' === $mode ? 30 : 3600);
+        $limit = max(1, min($limitCap, $limit));
+        $maxSeconds = max(1, min($secondsCap, $maxSeconds));
+        $linkIds = array_values(array_filter(array_unique(array_map('intval', $linkIds)), static function ($id) {
+            return $id > 0;
+        }));
+        if ($linkIds) {
+            $linkIds = array_slice($linkIds, 0, $limit);
+        }
         $startedAt = time();
         $deadline = microtime(true) + $maxSeconds;
         $runId = bin2hex(random_bytes(16));
@@ -68,7 +76,11 @@ final class Worker
                 throw new \RuntimeException('PHP cURL 扩展未安装，自动检测不可用。');
             }
 
-            $candidates = $this->repositories->dueCandidates($startedAt, $limit);
+            $candidates = $linkIds
+                ? array_map(static function ($linkId) {
+                    return ['link_id' => $linkId];
+                }, $linkIds)
+                : $this->repositories->dueCandidates($startedAt, $limit);
             foreach ($candidates as $candidate) {
                 if (microtime(true) >= $deadline) {
                     break;
@@ -105,7 +117,9 @@ final class Worker
                 ]);
             }
 
-            $partial = microtime(true) >= $deadline || count($candidates) >= $limit;
+            $partial = microtime(true) >= $deadline
+                || (!$linkIds && count($candidates) >= $limit)
+                || ($linkIds && ($counts['completed'] + $counts['failed']) < count($candidates));
             $status = $counts['failed'] > 0 ? ($counts['completed'] > 0 ? 'partial' : 'failed')
                 : ($partial ? 'partial' : 'completed');
             $this->repositories->cleanup(
