@@ -16,11 +16,11 @@ use Utils\Helper;
 require_once __DIR__ . '/vendor/autoload.php';
 
 /**
- * Theme-independent friend links management, display, and health checks.
+ * 独立的 Typecho 友情链接管理、展示、健康检测与通知插件。
  *
  * @package FriendLinks
  * @author NHPT
- * @version 0.2.0
+ * @version 0.2.1
  * @since 1.2.0
  * @link https://github.com/NHPT
  */
@@ -103,14 +103,10 @@ final class Plugin implements PluginInterface
         );
         $form->addItem($layout);
 
-        $sensitive = Settings::sensitiveKeys();
         foreach (Settings::defaults() as $name => $value) {
-            if (in_array($name, $sensitive, true)) {
-                continue;
-            }
-            $input = new Form\Element\Text($name, null, (string) $value, $name);
-            $input->setAttribute('class', 'hidden');
-            $form->addInput($input);
+            // Typecho expects one form item for every persisted option when it preloads this page.
+            // Fake items satisfy that contract without rendering configuration or secrets into HTML.
+            $form->addInput(new Form\Element\Fake($name, $value));
         }
     }
 

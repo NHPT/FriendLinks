@@ -7,8 +7,14 @@ if (!defined('__TYPECHO_ADMIN__')) {
 require_once dirname(__DIR__) . '/vendor/autoload.php';
 $user->pass('administrator');
 
-include __TYPECHO_ROOT_DIR__ . '/admin/header.php';
-include __TYPECHO_ROOT_DIR__ . '/admin/menu.php';
+function flm_admin_file(string $file): string
+{
+    $adminDir = defined('__TYPECHO_ADMIN_DIR__') ? __TYPECHO_ADMIN_DIR__ : '/admin/';
+    return rtrim(__TYPECHO_ROOT_DIR__, '/\\') . '/' . trim($adminDir, '/\\') . '/' . ltrim($file, '/\\');
+}
+
+require flm_admin_file('header.php');
+require flm_admin_file('menu.php');
 
 function flm_e($value): string
 {

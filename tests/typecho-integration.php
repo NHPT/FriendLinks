@@ -12,6 +12,7 @@ require dirname(__DIR__) . '/Plugin.php';
 
 use Typecho\Db;
 use Typecho\Plugin as TypechoPluginRegistry;
+use Typecho\Widget\Helper\Form;
 use TypechoPlugin\FriendLinks\Application\ImportService;
 use TypechoPlugin\FriendLinks\Application\LinkService;
 use TypechoPlugin\FriendLinks\Application\NotificationDispatcher;
@@ -36,6 +37,31 @@ Plugin::activate();
 TypechoPluginRegistry::activate('FriendLinks');
 Settings::save(Settings::defaults());
 Plugin::activate();
+
+$pluginInfo = TypechoPluginRegistry::parseInfo(dirname(__DIR__) . '/Plugin.php');
+$check(
+    '独立的 Typecho 友情链接管理、展示、健康检测与通知插件。' === $pluginInfo['description'],
+    'plugin description is Chinese'
+);
+$configForm = new Form();
+Plugin::config($configForm);
+$configInputs = $configForm->getInputs();
+$storedSettings = Settings::all();
+foreach ($storedSettings as $name => $value) {
+    $check(isset($configInputs[$name]), 'plugin config form covers stored option: ' . $name);
+    $check(
+        $configInputs[$name] instanceof Form\Element\Fake,
+        'plugin config option is non-rendering: ' . $name
+    );
+    $configInputs[$name]->value($value);
+}
+ob_start();
+$configForm->render();
+$configHtml = (string) ob_get_clean();
+$check(
+    false === strpos($configHtml, (string) $storedSettings['worker_secret']),
+    'plugin config page does not render stored secrets'
+);
 
 $migration = new MigrationManager();
 $check(2 === $migration->version(), 'schema version was stored');

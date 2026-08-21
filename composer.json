@@ -1,6 +1,6 @@
 {
     "name": "nhpt/friend-links",
-    "description": "Theme-independent friend links management and health checks for Typecho.",
+    "description": "独立的 Typecho 友情链接管理、展示、健康检测与通知插件。",
     "type": "typecho-plugin",
     "license": "MIT",
     "require": {
