@@ -50,9 +50,15 @@ final class ImportService
         $result = [];
         $seen = [];
         foreach ($rows as $index => $row) {
-            $item = $this->normalizeRow((array) $row);
+            $raw = (array) $row;
+            $item = $this->previewRow($raw);
             $item['line'] = $index + 1;
             $item['errors'] = [];
+            try {
+                $item = array_replace($item, $this->normalizeRow($raw));
+            } catch (\Throwable $error) {
+                $item['errors'][] = $error->getMessage();
+            }
             try {
                 $normalized = $this->normalizer->normalize((string) $item['url']);
                 $hash = $this->normalizer->hash($normalized);
@@ -84,8 +90,8 @@ final class ImportService
         }
 
         foreach ($rows as $row) {
-            $row = $this->normalizeRow((array) $row);
             try {
+                $row = $this->normalizeRow((array) $row);
                 $category = trim((string) $row['category']);
                 $validationRow = $row;
                 $validationRow['category_id'] = 0;
@@ -175,6 +181,7 @@ final class ImportService
         if (!$header) {
             return [];
         }
+        $header[0] = preg_replace('/^\xEF\xBB\xBF/', '', (string) $header[0]);
         $header = array_map(static function ($value) {
             return strtolower(trim((string) $value));
         }, $header);
@@ -217,18 +224,94 @@ final class ImportService
 
     private function normalizeRow(array $row): array
     {
+        $visibility = strtolower(trim($this->textValue($row['visibility'] ?? '', '可见性')));
+        if ('' === $visibility) {
+            $visibility = 'published';
+        } elseif (!in_array($visibility, ['published', 'draft', 'archived'], true)) {
+            throw new \InvalidArgumentException('可见性只能是 published、draft 或 archived');
+        }
+
+        $checkEnabled = 1;
+        if (
+            array_key_exists('check_enabled', $row)
+            && !(is_string($row['check_enabled']) && '' === trim($row['check_enabled']))
+            && null !== $row['check_enabled']
+        ) {
+            $checkEnabled = $this->booleanValue($row['check_enabled']);
+        }
+
         return [
-            'name' => trim((string) ($row['name'] ?? '')),
-            'url' => trim((string) ($row['url'] ?? '')),
-            'description' => trim((string) ($row['description'] ?? '')),
-            'logo_url' => trim((string) ($row['logo_url'] ?? ($row['logo'] ?? ''))),
-            'category' => trim((string) ($row['category'] ?? ($row['sort'] ?? ''))),
-            'sort_order' => (int) ($row['sort_order'] ?? 0),
-            'visibility' => in_array(($row['visibility'] ?? ''), ['published', 'draft', 'archived'], true)
-                ? $row['visibility']
-                : 'published',
-            'check_enabled' => array_key_exists('check_enabled', $row) ? (int) (bool) $row['check_enabled'] : 1,
+            'name' => trim($this->textValue($row['name'] ?? '', '名称')),
+            'url' => trim($this->textValue($row['url'] ?? '', 'URL')),
+            'description' => trim($this->textValue($row['description'] ?? '', '描述')),
+            'logo_url' => trim($this->textValue($row['logo_url'] ?? ($row['logo'] ?? ''), 'Logo URL')),
+            'category' => trim($this->textValue($row['category'] ?? ($row['sort'] ?? ''), '分类')),
+            'sort_order' => $this->integerValue($row['sort_order'] ?? 0, '排序'),
+            'visibility' => $visibility,
+            'check_enabled' => $checkEnabled,
         ];
+    }
+
+    private function previewRow(array $row): array
+    {
+        return [
+            'name' => $this->displayValue($row['name'] ?? ''),
+            'url' => $this->displayValue($row['url'] ?? ''),
+            'description' => $this->displayValue($row['description'] ?? ''),
+            'logo_url' => $this->displayValue($row['logo_url'] ?? ($row['logo'] ?? '')),
+            'category' => $this->displayValue($row['category'] ?? ($row['sort'] ?? '')),
+            'sort_order' => is_scalar($row['sort_order'] ?? 0) ? (int) ($row['sort_order'] ?? 0) : 0,
+            'visibility' => $this->displayValue($row['visibility'] ?? ''),
+            'check_enabled' => $this->displayValue($row['check_enabled'] ?? ''),
+        ];
+    }
+
+    private function booleanValue($value): int
+    {
+        if (is_bool($value)) {
+            return $value ? 1 : 0;
+        }
+        if (is_int($value) && in_array($value, [0, 1], true)) {
+            return $value;
+        }
+        $normalized = strtolower(trim($this->textValue($value, '自动检测')));
+        if (in_array($normalized, ['1', 'true', 'yes', 'on'], true)) {
+            return 1;
+        }
+        if (in_array($normalized, ['0', 'false', 'no', 'off'], true)) {
+            return 0;
+        }
+        throw new \InvalidArgumentException('自动检测只能是 true/false、yes/no、on/off 或 1/0');
+    }
+
+    private function integerValue($value, string $field): int
+    {
+        if (is_int($value)) {
+            $integer = $value;
+        } elseif (is_string($value) && '' === trim($value)) {
+            $integer = 0;
+        } elseif (is_string($value) && preg_match('/^-?\d+$/D', trim($value))) {
+            $integer = (int) trim($value);
+        } else {
+            throw new \InvalidArgumentException($field . '必须是整数');
+        }
+        if ($integer < -2147483648 || $integer > 2147483647) {
+            throw new \InvalidArgumentException($field . '超出允许范围');
+        }
+        return $integer;
+    }
+
+    private function textValue($value, string $field): string
+    {
+        if (null === $value || is_scalar($value)) {
+            return (string) $value;
+        }
+        throw new \InvalidArgumentException($field . '格式无效');
+    }
+
+    private function displayValue($value): string
+    {
+        return null === $value || is_scalar($value) ? trim((string) $value) : '';
     }
 
     private function safeCsvCell($value)

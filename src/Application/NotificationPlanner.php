@@ -39,11 +39,14 @@ final class NotificationPlanner
         $subject = NotificationTemplate::render(
             (string) $settings['notification_subject_template'],
             $context,
-            true
+            true,
+            NotificationTemplate::SUBJECT_MAX_BYTES
         );
         $message = NotificationTemplate::render(
             (string) $settings['notification_message_template'],
-            $context
+            $context,
+            false,
+            NotificationTemplate::MESSAGE_MAX_BYTES
         );
         $payload = [
             'event_id' => $eventKey,
@@ -68,6 +71,9 @@ final class NotificationPlanner
         $payloadJson = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if (false === $payloadJson) {
             throw new \RuntimeException('通知事件序列化失败。');
+        }
+        if (strlen($payloadJson) > NotificationTemplate::PAYLOAD_MAX_BYTES) {
+            throw new \RuntimeException('通知事件超过 64 KiB 限制。');
         }
 
         $rows = [];

@@ -20,15 +20,33 @@ final class EmailNotificationChannel implements NotificationChannelInterface
         $mailer = new PHPMailer(true);
         $mailer->CharSet = 'UTF-8';
         $mailer->isSMTP();
-        $mailer->Host = (string) ($settings['smtp_host'] ?? '');
+        $host = (string) ($settings['smtp_host'] ?? '');
+        $mailer->Host = $host;
         $mailer->Port = (int) ($settings['smtp_port'] ?? 587);
         $mailer->Timeout = $timeout;
         $mailer->getSMTPInstance()->Timelimit = $timeout;
-        $mailer->SMTPAuth = '' !== (string) ($settings['smtp_username'] ?? '');
-        $mailer->Username = (string) ($settings['smtp_username'] ?? '');
-        $mailer->Password = (string) ($settings['smtp_password'] ?? '');
 
         $encryption = (string) ($settings['smtp_encryption'] ?? 'starttls');
+        if (!in_array($encryption, ['none', 'starttls', 'smtps'], true)) {
+            throw new \RuntimeException('SMTP 加密方式无效。');
+        }
+        $username = (string) ($settings['smtp_username'] ?? '');
+        $password = (string) ($settings['smtp_password'] ?? '');
+        $hasUsername = '' !== $username;
+        $hasPassword = '' !== $password;
+        if ($hasUsername !== $hasPassword) {
+            throw new \RuntimeException('SMTP 用户名和密码必须同时填写。');
+        }
+        if ('none' === $encryption && ($hasUsername || $hasPassword)) {
+            throw new \RuntimeException('无加密 SMTP 不允许发送认证凭据。');
+        }
+        if ('none' === $encryption && !$this->isLoopbackHost($host)) {
+            throw new \RuntimeException('无加密 SMTP 主机必须是本机回环地址。');
+        }
+        $mailer->SMTPAuth = $hasUsername && $hasPassword;
+        $mailer->Username = $username;
+        $mailer->Password = $password;
+
         if ('smtps' === $encryption) {
             $mailer->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
         } elseif ('starttls' === $encryption) {
@@ -49,6 +67,16 @@ final class EmailNotificationChannel implements NotificationChannelInterface
         $mailer->Subject = (string) ($notification['subject'] ?? '');
         $mailer->Body = (string) ($notification['message'] ?? '');
         $mailer->send();
+    }
+
+    private function isLoopbackHost(string $host): bool
+    {
+        $host = strtolower(rtrim(trim($host, '[]'), '.'));
+        if ('localhost' === $host || '::1' === $host) {
+            return true;
+        }
+        return 1 === preg_match('/^127(?:\.\d{1,3}){3}$/D', $host)
+            && false !== filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
     }
 
     private function commandTimeout(array $settings, ?float $deadline, int $recipients): int

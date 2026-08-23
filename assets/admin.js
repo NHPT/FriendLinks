@@ -138,13 +138,179 @@
       });
     });
 
+    var allowed = ['policy', 'webhook', 'dingtalk', 'email', 'template'];
     var requested = window.location.hash.indexOf('#notification-') === 0
       ? window.location.hash.substring(14)
       : 'policy';
-    if (!form.querySelector('[data-flm-notification-panel="' + requested + '"]')) {
+    if (allowed.indexOf(requested) === -1) {
       requested = 'policy';
     }
     activate(requested, false);
+  }
+
+  function initializeSettingsTabs(form) {
+    var buttons = form.querySelectorAll('[data-flm-settings-tab]');
+    var panels = form.querySelectorAll('[data-flm-settings-panel]');
+    if (!buttons.length || !panels.length) {
+      return;
+    }
+
+    function activate(id, updateHash) {
+      Array.prototype.forEach.call(buttons, function (button) {
+        var active = button.getAttribute('data-flm-settings-tab') === id;
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+        button.parentNode.classList.toggle('current', active);
+      });
+      Array.prototype.forEach.call(panels, function (panel) {
+        panel.hidden = panel.getAttribute('data-flm-settings-panel') !== id;
+      });
+      if (updateHash && window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', '#settings-' + id);
+      }
+    }
+
+    Array.prototype.forEach.call(buttons, function (button) {
+      button.addEventListener('click', function () {
+        activate(button.getAttribute('data-flm-settings-tab'), true);
+      });
+    });
+
+    var allowed = ['display', 'detection', 'worker'];
+    var requested = window.location.hash.indexOf('#settings-') === 0
+      ? window.location.hash.substring(10)
+      : 'display';
+    if (allowed.indexOf(requested) === -1) {
+      requested = 'display';
+    }
+    activate(requested, false);
+  }
+
+  function initializeConfirmDialog(dialog) {
+    var title = dialog.querySelector('[data-flm-confirm-title]');
+    var message = dialog.querySelector('[data-flm-confirm-message]');
+    var acceptButton = dialog.querySelector('[data-flm-confirm-accept]');
+    var cancelButtons = dialog.querySelectorAll('[data-flm-confirm-cancel]');
+    var trigger = null;
+
+    function close(restoreFocus) {
+      if ('function' === typeof dialog.close) {
+        dialog.close();
+      } else {
+        dialog.removeAttribute('open');
+      }
+      if (restoreFocus && trigger) {
+        trigger.focus();
+      }
+      if (restoreFocus) {
+        trigger = null;
+      }
+    }
+
+    document.addEventListener('click', function (event) {
+      var candidate = event.target.closest('[data-flm-confirm]');
+      if (!candidate) {
+        return;
+      }
+      event.preventDefault();
+      trigger = candidate;
+      title.textContent = candidate.getAttribute('data-flm-confirm-title') || '确认操作';
+      message.textContent = candidate.getAttribute('data-flm-confirm-message') || '确认继续此操作？';
+      acceptButton.textContent = candidate.getAttribute('data-flm-confirm-label') || '确认';
+      if ('function' === typeof dialog.showModal) {
+        dialog.showModal();
+      } else {
+        dialog.setAttribute('open', '');
+      }
+      acceptButton.focus();
+    });
+
+    acceptButton.addEventListener('click', function () {
+      var activeTrigger = trigger;
+      if (!activeTrigger) {
+        return;
+      }
+      trigger = null;
+      close(false);
+      if (activeTrigger.form) {
+        if ('function' === typeof activeTrigger.form.requestSubmit) {
+          activeTrigger.form.requestSubmit(activeTrigger);
+        } else {
+          if (activeTrigger.formAction) {
+            activeTrigger.form.action = activeTrigger.formAction;
+          }
+          activeTrigger.form.submit();
+        }
+      } else if (activeTrigger.href) {
+        window.location.assign(activeTrigger.href);
+      }
+    });
+
+    Array.prototype.forEach.call(cancelButtons, function (button) {
+      button.addEventListener('click', function () {
+        close(true);
+      });
+    });
+    dialog.addEventListener('click', function (event) {
+      if (event.target === dialog) {
+        close(true);
+      }
+    });
+    dialog.addEventListener('cancel', function (event) {
+      event.preventDefault();
+      close(true);
+    });
+  }
+
+  function initializeAutomaticCheck(config) {
+    var linkId = config.getAttribute('data-flm-auto-check-id');
+    var url = config.getAttribute('data-flm-auto-check-url');
+    var state = document.getElementById('flm-link-state-' + linkId);
+    if (!linkId || !url) {
+      return;
+    }
+
+    var cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete('auto_check');
+    if (state) {
+      Array.prototype.slice.call(state.classList).forEach(function (className) {
+        if (className.indexOf('flm-state-') === 0) {
+          state.classList.remove(className);
+        }
+      });
+      state.classList.add('flm-state-checking');
+      state.textContent = '检测中…';
+    }
+
+    fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      keepalive: true,
+      headers: {'X-Requested-With': 'XMLHttpRequest'}
+    }).then(function (response) {
+      if (!response.ok) {
+        throw new Error('HTTP ' + response.status);
+      }
+      return response.json();
+    }).then(function (result) {
+      if (!result || !result.ok) {
+        throw new Error('check_failed');
+      }
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', cleanUrl.toString());
+      }
+      window.location.reload();
+    }).catch(function () {
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', cleanUrl.toString());
+      }
+      if (state) {
+        state.classList.remove('flm-state-checking');
+        state.classList.add('flm-state-pending');
+        state.textContent = '待检测';
+        state.title = '后台检测未完成，将由下一次 Worker 继续处理。';
+      }
+    });
   }
 
   function initializeHistoryDialog(dialog) {
@@ -201,6 +367,22 @@
     });
   }
 
+  function initializeSubmitLock(form) {
+    form.addEventListener('submit', function (event) {
+      if ('true' === form.getAttribute('data-flm-submitting')) {
+        event.preventDefault();
+        return;
+      }
+      form.setAttribute('data-flm-submitting', 'true');
+      form.setAttribute('aria-busy', 'true');
+      var submitter = event.submitter || document.activeElement;
+      if (submitter && submitter.form === form) {
+        submitter.setAttribute('aria-disabled', 'true');
+        submitter.classList.add('flm-is-submitting');
+      }
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
     Array.prototype.forEach.call(document.querySelectorAll('.flm-template-preview'), initializeTemplatePreview);
     Array.prototype.forEach.call(document.querySelectorAll('.typecho-table-select-all'), initializeBulkSelection);
@@ -209,6 +391,13 @@
       document.querySelectorAll('[data-flm-notification-settings]'),
       initializeNotificationTabs
     );
+    Array.prototype.forEach.call(document.querySelectorAll('[data-flm-settings]'), initializeSettingsTabs);
+    Array.prototype.forEach.call(document.querySelectorAll('[data-flm-confirm-dialog]'), initializeConfirmDialog);
+    Array.prototype.forEach.call(document.querySelectorAll('[data-flm-auto-check]'), initializeAutomaticCheck);
     Array.prototype.forEach.call(document.querySelectorAll('[data-flm-history-dialog]'), initializeHistoryDialog);
+    Array.prototype.forEach.call(
+      document.querySelectorAll('[data-flm-notification-settings]'),
+      initializeSubmitLock
+    );
   });
 }());

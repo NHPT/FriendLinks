@@ -3,6 +3,7 @@
 namespace TypechoPlugin\FriendLinks\Application;
 
 use TypechoPlugin\FriendLinks\Domain\NotificationTemplate;
+use TypechoPlugin\FriendLinks\Domain\Text;
 use TypechoPlugin\FriendLinks\Infrastructure\DingTalkNotificationChannel;
 use TypechoPlugin\FriendLinks\Infrastructure\EmailNotificationChannel;
 use TypechoPlugin\FriendLinks\Infrastructure\NotificationChannelInterface;
@@ -109,11 +110,14 @@ final class NotificationDispatcher
         $subject = NotificationTemplate::render(
             (string) $settings['notification_subject_template'],
             $context,
-            true
+            true,
+            NotificationTemplate::SUBJECT_MAX_BYTES
         );
         $message = NotificationTemplate::render(
             (string) $settings['notification_message_template'],
-            $context
+            $context,
+            false,
+            NotificationTemplate::MESSAGE_MAX_BYTES
         );
         $payload = json_encode([
             'event_id' => hash('sha256', 'test|' . $channel . '|' . $now),
@@ -133,6 +137,9 @@ final class NotificationDispatcher
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if (false === $payload) {
             throw new \RuntimeException('测试通知序列化失败。');
+        }
+        if (strlen($payload) > NotificationTemplate::PAYLOAD_MAX_BYTES) {
+            throw new \RuntimeException('测试通知超过 64 KiB 限制。');
         }
 
         $this->channel($channel)->send([
@@ -172,6 +179,6 @@ final class NotificationDispatcher
     private function summarize(string $message): string
     {
         $message = preg_replace('/[\x00-\x1F\x7F]+/', ' ', $message);
-        return substr(trim((string) $message), 0, 500);
+        return Text::truncateUtf8(trim((string) $message), 500);
     }
 }

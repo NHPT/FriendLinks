@@ -41,7 +41,7 @@ $cron = 'php ' . escapeshellarg(dirname(__DIR__) . '/bin/console.php') . ' check
 
         <h3>系统 Cron</h3>
         <code class="flm-code"><?php echo flm_e($cron); ?></code>
-        <p class="flm-help">建议每 5 分钟调用一次。命令使用绝对插件路径，不依赖 Cron 工作目录。</p>
+        <p class="flm-help">需要在服务器或主机面板中手动配置一次，建议每 5 分钟调用。停用插件后命令自动空操作，再次启用后自动恢复检测，无需增删 Cron。</p>
 
         <h3>运行状态</h3>
         <p>Schema 版本：<?php echo (new MigrationManager())->version(); ?>；

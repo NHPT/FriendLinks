@@ -5,6 +5,7 @@ namespace TypechoPlugin\FriendLinks\Infrastructure;
 use TypechoPlugin\FriendLinks\Domain\PreparedTarget;
 use TypechoPlugin\FriendLinks\Domain\TargetException;
 use TypechoPlugin\FriendLinks\Domain\TargetPolicy;
+use TypechoPlugin\FriendLinks\Domain\Text;
 use TypechoPlugin\FriendLinks\Domain\UrlNormalizer;
 
 final class SafeHttpClient
@@ -59,11 +60,12 @@ final class SafeHttpClient
                 return $this->failure('http_timeout', '整条重定向链已超时。', $started, $chain);
             }
 
-            $hop = $this->requestHop(
+            $hop = $this->requestGetHopWithRetry(
                 $target,
                 min($connectTimeout * 1000, $remainingMs),
                 $remainingMs,
-                max(0, $maxBytes - $totalBytes)
+                max(0, $maxBytes - $totalBytes),
+                $deadline
             );
             $totalBytes += $hop['body_bytes'];
             $chain[] = [
@@ -184,6 +186,69 @@ final class SafeHttpClient
             'duration_ms' => (int) round((microtime(true) - $started) * 1000),
             'chain' => $chain,
         ];
+    }
+
+    private function requestGetHopWithRetry(
+        PreparedTarget $target,
+        int $connectTimeoutMs,
+        int $timeoutMs,
+        int $maxBytes,
+        float $deadline
+    ): array {
+        $response = $this->requestHop($target, $connectTimeoutMs, $timeoutMs, $maxBytes);
+        if (!$this->isRetriableGetResponse($response)) {
+            return $response;
+        }
+
+        $firstAttemptBytes = (int) ($response['body_bytes'] ?? 0);
+        if ($firstAttemptBytes >= $maxBytes) {
+            return $response;
+        }
+        $delayMs = $this->retryDelayMs($response['headers'] ?? []);
+        $remainingMs = (int) floor(($deadline - microtime(true)) * 1000);
+        if ($remainingMs <= $delayMs + 100) {
+            return $response;
+        }
+        if ($delayMs > 0) {
+            usleep($delayMs * 1000);
+        }
+
+        $remainingMs = (int) floor(($deadline - microtime(true)) * 1000);
+        $response = $this->requestHop(
+            $target,
+            min($connectTimeoutMs, $remainingMs),
+            min($timeoutMs, $remainingMs),
+            $maxBytes - $firstAttemptBytes
+        );
+        $response['body_bytes'] = $firstAttemptBytes + (int) ($response['body_bytes'] ?? 0);
+        return $response;
+    }
+
+    private function isRetriableGetResponse(array $response): bool
+    {
+        if (empty($response['ok'])) {
+            return in_array((string) ($response['reason_code'] ?? ''), [
+                'http_timeout',
+                'http_unreachable',
+            ], true);
+        }
+
+        $status = (int) ($response['status'] ?? 0);
+        return in_array($status, [408, 425, 429], true) || ($status >= 500 && $status <= 599);
+    }
+
+    private function retryDelayMs(array $headers): int
+    {
+        $retryAfter = trim((string) ($headers['retry-after'] ?? ''));
+        if ('' === $retryAfter) {
+            return 100;
+        }
+        if (preg_match('/^\d+$/D', $retryAfter)) {
+            return min(2, (int) $retryAfter) * 1000;
+        }
+
+        $timestamp = strtotime($retryAfter);
+        return false === $timestamp ? 100 : min(2000, max(0, ($timestamp - time()) * 1000));
     }
 
     private function requestHop(
@@ -340,7 +405,9 @@ final class SafeHttpClient
             'state' => $state,
             'not_before' => $notBefore,
             'not_after' => $notAfter,
-            'issuer' => isset($leaf['Issuer']) ? substr((string) $leaf['Issuer'], 0, 300) : null,
+            'issuer' => isset($leaf['Issuer'])
+                ? Text::truncateUtf8((string) $leaf['Issuer'], 300)
+                : null,
         ];
     }
 
@@ -470,6 +537,6 @@ final class SafeHttpClient
     private function sanitizeError(string $message): string
     {
         $message = preg_replace('/[\x00-\x1F\x7F]+/', ' ', $message);
-        return substr(trim((string) $message), 0, 300);
+        return Text::truncateUtf8(trim((string) $message), 300);
     }
 }

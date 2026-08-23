@@ -18,6 +18,7 @@ $filters = [
 ];
 $links = $repositories->links($filters);
 $categories = $repositories->categories();
+$autoCheckId = max(0, (int) $request->get('auto_check', 0));
 ?>
 <div class="main flm-admin">
   <div class="body container">
@@ -25,6 +26,14 @@ $categories = $repositories->categories();
     <div class="row typecho-page-main" role="main">
       <div class="col-mb-12">
         <?php flm_tabs('links'); ?>
+        <?php if ($autoCheckId): ?>
+          <span
+            hidden
+            data-flm-auto-check
+            data-flm-auto-check-id="<?php echo $autoCheckId; ?>"
+            data-flm-auto-check-url="<?php echo flm_e(flm_action_url('run-check', ['id' => $autoCheckId])); ?>"
+          ></span>
+        <?php endif; ?>
         <div class="flm-toolbar">
           <a class="btn primary flm-add-link" href="<?php echo flm_e(flm_panel_url('link-edit')); ?>">新增友链</a>
           <form class="flm-inline" method="get">
@@ -59,7 +68,14 @@ $categories = $repositories->categories();
             <div class="flm-inline">
               <button class="btn btn-s" type="submit" formaction="<?php echo flm_e(flm_action_url('schedule')); ?>">立即检测</button>
               <button class="btn btn-s" type="submit" formaction="<?php echo flm_e(flm_action_url('schedule', ['full' => 1])); ?>">完整复检</button>
-              <button class="btn btn-s btn-warn" type="submit" onclick="return confirm('确认归档选中的友链？')">归档</button>
+              <button
+                class="btn btn-s btn-warn"
+                type="submit"
+                data-flm-confirm
+                data-flm-confirm-title="归档友链"
+                data-flm-confirm-message="确认归档选中的友链？归档后将不再公开展示。"
+                data-flm-confirm-label="确认归档"
+              >归档</button>
             </div>
             <span class="flm-muted"><?php echo count($links); ?> 条结果</span>
           </div>
@@ -75,7 +91,7 @@ $categories = $repositories->categories();
                   <td><input type="checkbox" name="id[]" value="<?php echo (int) $link['id']; ?>" aria-label="选择 <?php echo flm_e($link['name']); ?>"></td>
                   <td><strong><?php echo flm_e($link['name']); ?></strong><br><small><?php echo flm_e($link['url']); ?></small></td>
                   <td class="kit-hidden-mb"><?php echo flm_e($link['category_name'] ?: '未分类'); ?></td>
-                  <td><span class="flm-state flm-state-<?php echo flm_e($link['overall_state'] ?: 'pending'); ?>"><?php echo flm_e(StatusLabels::state($link['overall_state'] ?: 'pending')); ?></span></td>
+                  <td><span id="flm-link-state-<?php echo (int) $link['id']; ?>" class="flm-state flm-state-<?php echo flm_e($link['overall_state'] ?: 'pending'); ?>" aria-live="polite"><?php echo flm_e(StatusLabels::state($link['overall_state'] ?: 'pending')); ?></span></td>
                   <td class="kit-hidden-mb"><?php echo $link['checked_at'] ? flm_e(date('Y-m-d H:i', (int) $link['checked_at'])) : '尚未检测'; ?></td>
                   <td class="kit-hidden-mb"><?php echo (int) $link['sort_order']; ?></td>
                   <td>
@@ -85,7 +101,10 @@ $categories = $repositories->categories();
                         class="btn btn-s btn-warn"
                         type="submit"
                         formaction="<?php echo flm_e(flm_action_url('delete-link', ['link_id' => (int) $link['id']])); ?>"
-                        onclick="return confirm('确认永久删除此友链及其检测记录？')"
+                        data-flm-confirm
+                        data-flm-confirm-title="删除友链"
+                        data-flm-confirm-message="此操作会永久删除该友链及其检测记录，且无法撤销。"
+                        data-flm-confirm-label="永久删除"
                       >删除</button>
                     </div>
                   </td>

@@ -18,13 +18,16 @@ use TypechoPlugin\FriendLinks\Application\ImportService;
 use TypechoPlugin\FriendLinks\Application\LinkService;
 use TypechoPlugin\FriendLinks\Application\NotificationDispatcher;
 use TypechoPlugin\FriendLinks\Application\Settings;
+use TypechoPlugin\FriendLinks\Application\Worker;
 use TypechoPlugin\FriendLinks\Domain\NotificationTemplate;
+use TypechoPlugin\FriendLinks\Infrastructure\EmailNotificationChannel;
 use TypechoPlugin\FriendLinks\Infrastructure\MigrationManager;
 use TypechoPlugin\FriendLinks\Infrastructure\NotificationChannelInterface;
 use TypechoPlugin\FriendLinks\Infrastructure\Repositories;
 use TypechoPlugin\FriendLinks\Plugin;
 use TypechoPlugin\FriendLinks\Presentation\Renderer;
 use TypechoPlugin\FriendLinks\Presentation\TemplateCatalog;
+use Utils\Helper;
 use Widget\Base\Options as OptionsWidget;
 
 $assertions = 0;
@@ -35,10 +38,38 @@ $check = static function ($condition, string $message) use (&$assertions): void 
     }
 };
 
+$foreignMenuIndex = Helper::addMenu('友情链接');
 Plugin::activate();
 TypechoPluginRegistry::activate('FriendLinks');
-Settings::save(Settings::defaults());
+$defaultWorkerSecret = Settings::defaults()['worker_secret'];
+$check('' === $defaultWorkerSecret, 'default settings do not generate a transient HTTP Worker secret');
+$check(
+    0 === Settings::defaults()['http_worker_enabled'],
+    'signed HTTP Worker is disabled by default'
+);
+Settings::initialize(Settings::defaults());
+$initializedWorkerSecret = (string) Settings::get('worker_secret');
+$check(
+    1 === preg_match('/^[a-f0-9]{64}$/', $initializedWorkerSecret),
+    'initial configuration generates and persists a random HTTP Worker secret'
+);
+$workerSecretRow = Db::get()->fetchRow(Db::get()->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_worker_secret')->where('user = ?', 0)->limit(1));
+$check(
+    $workerSecretRow && $initializedWorkerSecret === $workerSecretRow['value'],
+    'HTTP Worker secret is stored in its dedicated database option'
+);
+$pluginSettingsRow = Db::get()->fetchRow(Db::get()->select('value')->from('table.options')
+    ->where('name = ?', 'plugin:FriendLinks')->where('user = ?', 0)->limit(1));
+$check(
+    false === strpos((string) ($pluginSettingsRow['value'] ?? ''), $initializedWorkerSecret),
+    'HTTP Worker secret is not duplicated in serialized plugin settings'
+);
 Plugin::activate();
+$check(
+    $initializedWorkerSecret === Settings::get('worker_secret'),
+    'repeated activation preserves the HTTP Worker secret'
+);
 
 $pluginInfo = TypechoPluginRegistry::parseInfo(dirname(__DIR__) . '/Plugin.php');
 $check(
@@ -85,24 +116,77 @@ $linkEditPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/link-edit
 $linksPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/links.php');
 $categoriesPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/categories.php');
 $settingsPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/settings.php');
+$adminScript = (string) file_get_contents(dirname(__DIR__) . '/assets/admin.js');
+$actionSource = (string) file_get_contents(dirname(__DIR__) . '/Action.php');
+$pluginSource = (string) file_get_contents(dirname(__DIR__) . '/Plugin.php');
+$saveLinkSource = preg_match(
+    '/private function saveLink\\(\\): void(.*?)private function archiveLinks\\(\\): void/s',
+    $actionSource,
+    $saveLinkMatch
+) ? $saveLinkMatch[1] : '';
 $check(
-    false !== strpos($linkEditPanel, "StatusLabels::state(\$link['overall_state'])")
-        && false !== strpos($linkEditPanel, "date('Y-m-d H:i:s', (int) \$link['checked_at'])")
+    false === strpos($linkEditPanel, '最近状态')
         && false === strpos($linkEditPanel, "json_decode(\$link['details_json']")
-        && false === strpos($linkEditPanel, "StatusLabels::reason(\$link['reason_code'])"),
-    'link editor shows only the state label and checked time'
+        && false === strpos($linkEditPanel, 'StatusLabels::'),
+    'link editor does not render detection status or diagnostic details'
 );
 $check(
-    false !== strpos($linksPanel, "confirm('确认永久删除此友链及其检测记录？')"),
-    'link deletion requires confirmation'
+    false !== strpos($saveLinkSource, '$repositories->schedule([$saved], true)')
+        && false === strpos($saveLinkSource, '->run(')
+        && false !== strpos($saveLinkSource, '&auto_check='),
+    'saving a link queues detection and redirects to automatic background checking'
 );
 $check(
-    false !== strpos($categoriesPanel, "confirm('删除分类后，原友链将转为未分类。继续？')"),
-    'category deletion requires confirmation'
+    false !== strpos($linksPanel, 'data-flm-auto-check')
+        && false !== strpos($actionSource, "case 'run-check'")
+        && false !== strpos($adminScript, 'initializeAutomaticCheck'),
+    'link list automatically starts queued detection without a manual click'
+);
+$check(
+    false !== strpos($linksPanel, 'data-flm-confirm-title="删除友链"')
+        && false === strpos($linksPanel, 'confirm('),
+    'link deletion uses the in-page confirmation dialog'
+);
+$check(
+    false !== strpos($categoriesPanel, 'data-flm-confirm-title="删除分类"')
+        && false === strpos($categoriesPanel, 'confirm('),
+    'category deletion uses the in-page confirmation dialog'
 );
 $check(
     false === strpos($settingsPanel, "\$settings['worker_secret']"),
     'settings page does not render the HTTP Worker secret'
+);
+$check(
+    false !== strpos($settingsPanel, 'data-flm-settings-tab="display"')
+        && false !== strpos($settingsPanel, 'data-flm-settings-tab="detection"')
+        && false !== strpos($settingsPanel, 'data-flm-settings-tab="worker"')
+        && false !== strpos($settingsPanel, '<div class="col-mb-12">')
+        && false === strpos($settingsPanel, 'col-tb-offset'),
+    'settings page uses the same full content width as other FriendLinks pages'
+);
+$check(
+    false === strpos($settingsPanel, 'create-page')
+        && false === strpos($settingsPanel, 'clear-page-template')
+        && false === strpos($actionSource, "case 'create-page'")
+        && false === strpos($actionSource, "case 'clear-page-template'"),
+    'plugin does not create or modify Typecho pages'
+);
+$check(
+    false !== strpos($settingsPanel, 'name="worker_secret_new"')
+        && false !== strpos($settingsPanel, 'data-flm-confirm-title="轮换 HTTP Worker 密钥"')
+        && false !== strpos($adminScript, 'initializeConfirmDialog'),
+    'worker secret rotation uses user input and the shared in-page dialog'
+);
+$check(
+    false !== strpos($settingsPanel, 'name="http_worker_enabled"')
+        && false !== strpos($actionSource, "'worker_disabled'"),
+    'signed HTTP Worker requires explicit administrator enablement'
+);
+$check(
+    false === strpos($pluginSource, 'panelTable')
+        && false === strpos($pluginSource, 'debugLifecycleState')
+        && false === strpos($pluginSource, '.dbg'),
+    'plugin lifecycle uses only public menu APIs and contains no debug telemetry'
 );
 
 $migration = new MigrationManager();
@@ -116,9 +200,18 @@ $panelRow = Db::get()->fetchRow(Db::get()->select('value')->from('table.options'
     ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
 $panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
 $friendMenus = array_filter($panelTable['parent'], static function ($name) {
-    return '友情链接' === $name;
+    return '友情链接 · FriendLinks' === $name;
 });
 $check(1 === count($friendMenus), 'repeated activation keeps one FriendLinks admin menu');
+$foreignMenus = array_filter($panelTable['parent'], static function ($name) {
+    return '友情链接' === $name;
+});
+$check(
+    !empty($foreignMenus)
+        && isset($panelTable['parent'][$foreignMenuIndex - 10])
+        && '友情链接' === $panelTable['parent'][$foreignMenuIndex - 10],
+    'FriendLinks registration preserves another plugin menu with a generic label'
+);
 $menuIndexRow = $db->fetchRow($db->select('value')->from('table.options')
     ->where('name = ?', 'friendlinks_menu_index')->where('user = ?', 0)->limit(1));
 $check(
@@ -158,6 +251,19 @@ $settings['page_cid'] = $pageId;
 Settings::save($settings);
 Settings::assertPage($pageId);
 $check((int) Settings::get('page_cid') === $pageId, 'page binding persisted');
+$rotatedWorkerSecret = str_repeat('a', 64);
+Settings::rotateWorkerSecret($rotatedWorkerSecret);
+$check(
+    $rotatedWorkerSecret === Settings::get('worker_secret'),
+    'administrator-provided HTTP Worker secret is persisted'
+);
+$invalidWorkerSecretRejected = false;
+try {
+    Settings::rotateWorkerSecret('too-short');
+} catch (InvalidArgumentException $error) {
+    $invalidWorkerSecretRejected = true;
+}
+$check($invalidWorkerSecretRejected, 'HTTP Worker secret must be 64 hexadecimal characters');
 
 $notificationSettings = Settings::sanitizeNotifications([
     'notifications_enabled' => 1,
@@ -239,6 +345,51 @@ $check(
     'admin@example.com,ops@example.com' === $emailSettings['email_recipients'],
     'SMTP notification settings normalize and validate recipients'
 );
+$plainAuthRejected = false;
+try {
+    Settings::sanitizeNotifications(array_merge($emailSettings, [
+        'smtp_encryption' => 'none',
+    ]));
+} catch (InvalidArgumentException $error) {
+    $plainAuthRejected = false !== strpos($error->getMessage(), '无加密 SMTP');
+}
+$check($plainAuthRejected, 'notification settings reject SMTP authentication without transport encryption');
+$remotePlaintextRejected = false;
+try {
+    Settings::sanitizeNotifications(array_merge($emailSettings, [
+        'smtp_encryption' => 'none',
+        'smtp_username' => '',
+        'smtp_password' => '',
+    ]));
+} catch (InvalidArgumentException $error) {
+    $remotePlaintextRejected = false !== strpos($error->getMessage(), '回环地址');
+}
+$check($remotePlaintextRejected, 'notification settings restrict plaintext SMTP to loopback relays');
+$localRelaySettings = Settings::sanitizeNotifications(array_merge($emailSettings, [
+    'smtp_host' => '127.0.0.1',
+    'smtp_port' => 25,
+    'smtp_encryption' => 'none',
+    'smtp_username' => '',
+    'smtp_password' => '',
+]));
+$check(
+    'none' === $localRelaySettings['smtp_encryption'],
+    'notification settings allow an unauthenticated loopback SMTP relay'
+);
+$senderPlaintextRejected = false;
+try {
+    (new EmailNotificationChannel())->send([
+        'subject' => 'Security regression',
+        'message' => 'No notification may be sent over remote plaintext SMTP.',
+    ], array_merge($emailSettings, [
+        'smtp_encryption' => 'none',
+        'smtp_username' => '',
+        'smtp_password' => '',
+    ]));
+} catch (Throwable $error) {
+    $senderPlaintextRejected = false !== strpos($error->getMessage(), '回环地址');
+}
+$check($senderPlaintextRejected, 'SMTP sender independently rejects remote plaintext delivery');
 
 $repositories = new Repositories();
 $service = new LinkService($repositories);
@@ -260,6 +411,39 @@ $linkId = $service->save([
 ]);
 $check($linkId > 0, 'link was created');
 $check(1 === count($repositories->frontendLinks()), 'frontend query returns published link');
+$backlogBeforeDisabled = $repositories->backlog(time());
+$disabledBacklogLinkId = $service->save([
+    'name' => 'Disabled backlog link',
+    'url' => 'https://disabled-backlog.example.com/',
+    'description' => '',
+    'logo_url' => '',
+    'category_id' => 0,
+    'sort_order' => 0,
+    'visibility' => 'published',
+    'check_enabled' => 0,
+]);
+$backlogAfterDisabled = $repositories->backlog(time());
+$check(
+    $backlogBeforeDisabled['due'] === $backlogAfterDisabled['due']
+        && 0 === $repositories->schedule([$disabledBacklogLinkId], true),
+    'disabled links are excluded from backlog and manual scheduling'
+);
+$searchLinkId = $service->save([
+    'name' => '100% reliable_name',
+    'url' => 'https://search-literal.example.com/',
+    'description' => '',
+    'logo_url' => '',
+    'category_id' => 0,
+    'sort_order' => 0,
+    'visibility' => 'draft',
+    'check_enabled' => 0,
+]);
+$percentMatches = array_map('intval', array_column($repositories->links(['keywords' => '%']), 'id'));
+$underscoreMatches = array_map('intval', array_column($repositories->links(['keywords' => '_']), 'id'));
+$check(
+    in_array($searchLinkId, $percentMatches, true) && in_array($searchLinkId, $underscoreMatches, true),
+    'keyword search treats percent and underscore as literal characters'
+);
 
 $duplicateRejected = false;
 try {
@@ -339,12 +523,14 @@ $check(
 );
 
 $token = str_repeat('a', 32);
-$check($repositories->claim($linkId, $token, time(), time() + 300), 'due task was claimed atomically');
+$leaseNow = time();
+$leaseUntil = $leaseNow + 300;
+$check($repositories->claim($linkId, $token, $leaseNow, $leaseUntil), 'due task was claimed atomically');
 $claimed = $repositories->claimedLink($linkId, $token);
 $check($claimed && (int) $claimed['id'] === $linkId, 'claimed task can be loaded by token');
 $check(
-    $repositories->renewLease($linkId, $token, time(), time() + 300),
-    'active detection lease can be renewed by its owner'
+    $repositories->renewLease($linkId, $token, $leaseNow, $leaseUntil),
+    'active detection lease renewal accepts an unchanged lease deadline'
 );
 $repositories->persistResult($linkId, $token, time(), [
     'overall_state' => 'healthy',
@@ -403,6 +589,22 @@ $repositories->persistResult($linkId, $token, time(), [
 ]]);
 $check('healthy' === $repositories->link($linkId)['overall_state'], 'leased result was persisted');
 $check(1 === count($repositories->history(10, $linkId)), 'history was inserted in result transaction');
+$check(
+    1 === $repositories->schedule([$linkId], true)
+        && 1 === $repositories->schedule([$linkId], true),
+    'scheduling counts eligible links even when due timestamps are already zero'
+);
+$supersededToken = str_repeat('1', 32);
+$supersededNow = time();
+$check(
+    $repositories->claim($linkId, $supersededToken, $supersededNow, $supersededNow + 300),
+    'scheduled task can be claimed before a newer manual request'
+);
+$repositories->schedule([$linkId], true);
+$check(
+    null === $repositories->claimedLink($linkId, $supersededToken),
+    'a newer manual schedule invalidates the in-flight lease'
+);
 $queuedNotifications = $repositories->notifications(10);
 $check(1 === count($queuedNotifications), 'notification was queued with the check result');
 $notificationId = (int) $queuedNotifications[0]['id'];
@@ -422,7 +624,20 @@ $repositories->markNotificationFailed(
     $notificationId,
     $notificationToken,
     time() + 300,
-    'integration failure'
+    str_repeat('错', 200)
+);
+$failedNotification = null;
+foreach ($repositories->notifications(20) as $notification) {
+    if ((int) $notification['id'] === $notificationId) {
+        $failedNotification = $notification;
+        break;
+    }
+}
+$check(
+    $failedNotification
+        && strlen((string) $failedNotification['last_error']) <= 500
+        && 1 === preg_match('//u', (string) $failedNotification['last_error']),
+    'notification errors are truncated at a valid UTF-8 boundary'
 );
 $check($repositories->retryNotification($notificationId), 'failed notification can be retried');
 $retryToken = str_repeat('d', 32);
@@ -531,6 +746,57 @@ try {
     $tooManyRowsRejected = true;
 }
 $check($tooManyRowsRejected, 'imports over 500 rows are rejected instead of truncated');
+$bomPreview = $importService->preview(
+    'csv',
+    "\xEF\xBB\xBFname,url,visibility,check_enabled\n"
+        . "BOM import,https://bom-import.example.com/,draft,false\n"
+);
+$check(
+    1 === count($bomPreview)
+        && empty($bomPreview[0]['errors'])
+        && 0 === $bomPreview[0]['check_enabled'],
+    'CSV import accepts a UTF-8 BOM and preserves explicit false values'
+);
+$invalidImportPreview = $importService->preview('json', (string) json_encode([[
+    'name' => 'Invalid visibility',
+    'url' => 'https://invalid-visibility.example.com/',
+    'visibility' => 'private',
+    'check_enabled' => 'false',
+]]));
+$check(
+    !empty($invalidImportPreview[0]['errors'])
+        && false !== strpos(implode(' ', $invalidImportPreview[0]['errors']), '可见性'),
+    'import preview reports an invalid visibility instead of publishing the row'
+);
+$invalidImportResult = $importService->import($invalidImportPreview);
+$check(
+    0 === $invalidImportResult['created'] && 1 === $invalidImportResult['skipped'],
+    'final import skips a row with invalid visibility'
+);
+$falseBooleanPreview = $importService->preview('json', (string) json_encode([[
+    'name' => 'Disabled imported check',
+    'url' => 'https://disabled-import.example.com/',
+    'visibility' => 'draft',
+    'check_enabled' => 'false',
+]]));
+$check(
+    empty($falseBooleanPreview[0]['errors']) && 0 === $falseBooleanPreview[0]['check_enabled'],
+    'import parses the string false as disabled detection'
+);
+$falseBooleanResult = $importService->import($falseBooleanPreview);
+$importedDisabled = array_values(array_filter(
+    $repositories->exportLinks(),
+    static function ($link) {
+        return 'https://disabled-import.example.com/' === $link['url'];
+    }
+));
+$check(
+    1 === $falseBooleanResult['created']
+        && 1 === count($importedDisabled)
+        && 'draft' === $importedDisabled[0]['visibility']
+        && 0 === (int) $importedDisabled[0]['check_enabled'],
+    'final import preserves explicit draft visibility and disabled detection'
+);
 $service->save([
     'name' => '=1+1',
     'url' => 'https://formula.example.com/',
@@ -634,6 +900,62 @@ $deleteNotifications = array_filter($repositories->notifications(100), static fu
 });
 $check(!$deleteNotifications, 'deleting a link removes its notification outbox rows');
 
+$workerFailureSettings = Settings::all();
+$workerFailureSettings['notifications_enabled'] = 0;
+Settings::save($workerFailureSettings);
+$blockedLinkId = $service->save([
+    'name' => 'Blocked target',
+    'url' => 'https://127.0.0.1/',
+    'description' => '',
+    'logo_url' => '',
+    'category_id' => 0,
+    'sort_order' => 0,
+    'visibility' => 'published',
+    'check_enabled' => 1,
+]);
+$blockedStartedAt = time();
+$db->query($db->update('table.flm_current_status')->rows([
+    'domain_next_check_at' => $blockedStartedAt + 86400,
+])->where('link_id = ?', $blockedLinkId));
+$blockedResult = (new Worker($repositories))->run('admin', 1, 5, [$blockedLinkId]);
+$blockedStatus = $db->fetchRow($db->select()->from('table.flm_current_status')
+    ->where('link_id = ?', $blockedLinkId)->limit(1));
+$check(
+    1 === $blockedResult['completed']
+        && 0 === $blockedResult['failed']
+        && (int) $blockedStatus['next_check_at'] > $blockedStartedAt
+        && (int) $blockedStatus['http_next_check_at'] > $blockedStartedAt
+        && (int) $blockedStatus['tls_next_check_at'] > $blockedStartedAt
+        && null === $blockedStatus['http_checked_at']
+        && null === $blockedStatus['tls_checked_at'],
+    'DNS policy failures back off due HTTP and TLS work without marking either probe as completed'
+);
+$workerFailureDatabase = new \TypechoPlugin\FriendLinks\Infrastructure\Database();
+$quote = 'mysql' === $workerFailureDatabase->driver() ? '`' : '"';
+$statusTable = $workerFailureDatabase->prefix() . 'flm_current_status';
+$hiddenStatusTable = $workerFailureDatabase->prefix() . 'flm_current_status_failure_test';
+$workerFailureDatabase->rawWrite(
+    'ALTER TABLE ' . $quote . $statusTable . $quote
+    . ' RENAME TO ' . $quote . $hiddenStatusTable . $quote
+);
+try {
+    $workerFailureResult = (new Worker())->run('cli', 1, 2);
+} finally {
+    $workerFailureDatabase->rawWrite(
+        'ALTER TABLE ' . $quote . $hiddenStatusTable . $quote
+        . ' RENAME TO ' . $quote . $statusTable . $quote
+    );
+}
+$failedRun = $repositories->latestRuns(1)[0] ?? null;
+$check(
+    0 === $workerFailureResult['completed']
+        && $workerFailureResult['failed'] >= 1
+        && $failedRun
+        && 'failed' === $failedRun['status']
+        && (int) $failedRun['failed_count'] >= 1,
+    'worker top-level database failures propagate to result counters and run status'
+);
+
 if (getenv('KEEP_TYPECHO_FIXTURE')) {
     $db->query($db->update('table.options')
         ->rows(['value' => serialize(TypechoPluginRegistry::export())])
@@ -648,47 +970,17 @@ $settings = Settings::all();
 $settings['frontend_template'] = 'minimal';
 Settings::save($settings);
 
-$panelRow = $db->fetchRow($db->select('value')->from('table.options')
-    ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
-$panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
-$currentMenuIndexRow = $db->fetchRow($db->select('value')->from('table.options')
-    ->where('name = ?', 'friendlinks_menu_index')->where('user = ?', 0)->limit(1));
-$currentMenuIndex = (int) $currentMenuIndexRow['value'];
-$foreignPanel = rawurlencode('Legacy/missing.php');
-$panelTable['child'][$currentMenuIndex][] = [
-    '遗留页面',
-    '遗留页面',
-    'extending.php?panel=' . $foreignPanel,
-    'administrator',
-    false,
-    '',
-];
-$panelTable['file'][] = $foreignPanel;
-$panelTable['parent'][] = '友情链接';
-$staleParentIndex = array_key_last($panelTable['parent']);
-$staleMenuIndex = (int) $staleParentIndex + 10;
-$stalePanel = rawurlencode(rawurlencode('FriendLinks/panel/links.php'));
-$panelTable['child'][$staleMenuIndex][] = [
-    '友链',
-    '遗留菜单测试',
-    'extending.php?panel=' . $stalePanel,
-    'administrator',
-    false,
-    '',
-];
-$panelTable['file'][] = $stalePanel;
-$panelValue = serialize($panelTable);
-\Utils\Helper::options()->panelTable = $panelValue;
-$db->query($db->update('table.options')->rows(['value' => $panelValue])
-    ->where('name = ?', 'panelTable')->where('user = ?', 0));
-
 Plugin::deactivate();
 $panelRow = $db->fetchRow($db->select('value')->from('table.options')
     ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
 $panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
 $check(
-    !in_array('友情链接', $panelTable['parent'] ?? [], true),
-    'deactivation removes current and stale FriendLinks menus'
+    !in_array('友情链接 · FriendLinks', $panelTable['parent'] ?? [], true),
+    'deactivation removes the registered FriendLinks menu'
+);
+$check(
+    in_array('友情链接', $panelTable['parent'] ?? [], true),
+    'deactivation does not remove another plugin menu with a generic label'
 );
 $remainingPanelReferences = [];
 foreach ($panelTable['child'] ?? [] as $items) {
@@ -705,12 +997,6 @@ $check(
     }),
     'deactivation removes FriendLinks child panels and access whitelist entries'
 );
-$check(
-    !array_filter($remainingPanelReferences, static function ($reference) {
-        return false !== strpos($reference, 'Legacy/missing.php');
-    }),
-    'deactivation removes unknown historical panels from the owned menu index'
-);
 $menuIndexRow = $db->fetchRow($db->select('value')->from('table.options')
     ->where('name = ?', 'friendlinks_menu_index')->where('user = ?', 0)->limit(1));
 $check(!$menuIndexRow, 'deactivation removes the stored FriendLinks menu index');
@@ -719,6 +1005,10 @@ $db->query($db->delete('table.options')->where('name = ?', 'plugin:FriendLinks')
 Plugin::activate();
 Plugin::configHandle(Settings::defaults(), true);
 $check('minimal' === Settings::get('frontend_template'), 'settings survive deactivate and reactivate');
+$check(
+    $rotatedWorkerSecret === Settings::get('worker_secret'),
+    'HTTP Worker secret survives deactivate and reactivate without external changes'
+);
 
 Plugin::deactivate();
 $migration->uninstall();
@@ -731,5 +1021,9 @@ foreach (['categories', 'links', 'current_status', 'check_history', 'runs', 'cac
     }
     $check(!$tableExists, 'uninstall dropped table: ' . $table);
 }
+$workerSecretRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_worker_secret')->where('user = ?', 0)->limit(1));
+$check(!$workerSecretRow, 'uninstall removes the dedicated HTTP Worker secret');
+Helper::removeMenu('友情链接');
 
 fwrite(STDOUT, "OK: {$assertions} Typecho integration assertions\n");

@@ -30,6 +30,7 @@ final class StatusLabels
         'dns_failed' => '解析失败',
         'dns_blocked_target' => '目标被安全策略拒绝',
         'dns_rebinding_detected' => '检测到 DNS Rebinding',
+        'idn_unsupported' => '运行环境不支持国际化域名检测',
         'tls_expired' => '证书已过期',
         'tls_not_yet_valid' => '证书尚未生效',
         'tls_expiring' => '证书即将过期',

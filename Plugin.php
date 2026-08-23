@@ -26,7 +26,7 @@ require_once __DIR__ . '/vendor/autoload.php';
  */
 final class Plugin implements PluginInterface
 {
-    private const MENU_NAME = '友情链接';
+    private const MENU_NAME = '友情链接 · FriendLinks';
     private const MENU_INDEX_OPTION = 'friendlinks_menu_index';
     private const SETTINGS_BACKUP_OPTION = 'friendlinks_settings_backup';
     private const ACTION_NAME = 'friendlinks';
@@ -56,23 +56,31 @@ final class Plugin implements PluginInterface
         self::removeAdminRegistration();
 
         $menuIndex = Helper::addMenu(self::MENU_NAME);
-        self::saveMenuIndex($menuIndex);
-        Helper::addPanel(
-            $menuIndex,
-            self::PANELS[0],
-            '友链',
-            '友链管理',
-            'administrator',
-            false,
-            'extending.php?panel=FriendLinks/panel/link-edit.php'
-        );
-        Helper::addPanel($menuIndex, self::PANELS[1], '编辑友链', '编辑友链', 'administrator', true);
-        Helper::addPanel($menuIndex, self::PANELS[2], '分类', '友链分类', 'administrator');
-        Helper::addPanel($menuIndex, self::PANELS[3], '健康', '检测健康总览', 'administrator');
-        Helper::addPanel($menuIndex, self::PANELS[4], '历史', '检测历史', 'administrator');
-        Helper::addPanel($menuIndex, self::PANELS[5], '导入导出', '导入导出', 'administrator');
-        Helper::addPanel($menuIndex, self::PANELS[6], '通知', '通知设置与投递记录', 'administrator');
-        Helper::addPanel($menuIndex, self::PANELS[7], '设置', 'FriendLinks 设置', 'administrator');
+        try {
+            self::saveMenuIndex($menuIndex);
+            Helper::addPanel(
+                $menuIndex,
+                self::PANELS[0],
+                '友链',
+                '友链管理',
+                'administrator',
+                false,
+                'extending.php?panel=FriendLinks/panel/link-edit.php'
+            );
+            Helper::addPanel($menuIndex, self::PANELS[1], '编辑友链', '编辑友链', 'administrator', true);
+            Helper::addPanel($menuIndex, self::PANELS[2], '分类', '友链分类', 'administrator');
+            Helper::addPanel($menuIndex, self::PANELS[3], '健康', '检测健康总览', 'administrator');
+            Helper::addPanel($menuIndex, self::PANELS[4], '历史', '检测历史', 'administrator');
+            Helper::addPanel($menuIndex, self::PANELS[5], '导入导出', '导入导出', 'administrator');
+            Helper::addPanel($menuIndex, self::PANELS[6], '通知', '通知设置与投递记录', 'administrator');
+            Helper::addPanel($menuIndex, self::PANELS[7], '设置', 'FriendLinks 设置', 'administrator');
+        } catch (\Throwable $error) {
+            try {
+                self::removeAdminRegistration($menuIndex);
+            } catch (\Throwable $ignored) {
+            }
+            throw new \Typecho\Plugin\Exception('FriendLinks 后台菜单注册失败：' . $error->getMessage());
+        }
 
         Helper::addAction(self::ACTION_NAME, 'FriendLinks_Action');
         Helper::addRoute(self::ROUTE_NAME, '/friendlinks/worker', 'FriendLinks_Action', 'worker');
@@ -86,10 +94,14 @@ final class Plugin implements PluginInterface
 
     public static function deactivate()
     {
-        self::backupSettings();
-        self::removeAdminRegistration();
-        Helper::removeAction(self::ACTION_NAME);
-        Helper::removeRoute(self::ROUTE_NAME);
+        try {
+            self::backupSettings();
+            self::removeAdminRegistration();
+            Helper::removeAction(self::ACTION_NAME);
+            Helper::removeRoute(self::ROUTE_NAME);
+        } catch (\Throwable $error) {
+            throw new \Typecho\Plugin\Exception('FriendLinks 停用清理失败：' . $error->getMessage());
+        }
 
         return 'FriendLinks 已停用，业务数据仍保留。';
     }
@@ -105,6 +117,13 @@ final class Plugin implements PluginInterface
             . 'justify-content:center;line-height:1}'
             . '.flm-config-danger{border-top:1px solid #d9d9d6;margin-top:28px;padding-top:16px}'
             . '.flm-config-danger input{box-sizing:border-box;display:block;margin:6px 0 10px;max-width:360px;width:100%}'
+            . '.flm-config-dialog{background:#fff;border:1px solid #d9d9d6;border-radius:4px;'
+            . 'box-shadow:0 12px 36px rgba(0,0,0,.2);color:#444;max-width:440px;padding:0;width:calc(100% - 32px)}'
+            . '.flm-config-dialog::backdrop{background:rgba(0,0,0,.42)}'
+            . '.flm-config-dialog h3{border-bottom:1px solid #d9d9d6;font-size:16px;margin:0;padding:16px 18px}'
+            . '.flm-config-dialog p{line-height:1.7;margin:0;padding:16px 18px}'
+            . '.flm-config-dialog-actions{border-top:1px solid #d9d9d6;display:flex;gap:8px;'
+            . 'justify-content:flex-end;padding:12px 18px}'
             . '</style>'
             . '<p>FriendLinks 是包含管理、检测和历史记录的独立工具，请通过专用菜单操作。</p>'
             . '<p><a class="btn primary flm-config-link" href="'
@@ -117,19 +136,32 @@ final class Plugin implements PluginInterface
             . '<input id="flm-config-delete-confirmation" type="text" name="confirmation" '
             . 'form="flm-uninstall-form" autocomplete="off">'
             . '<button id="flm-config-uninstall" class="btn btn-warn flm-config-uninstall" '
-            . 'type="submit" form="flm-uninstall-form" disabled>停用插件并删除数据</button></div>'
+            . 'type="button" disabled>停用插件并删除数据</button></div>'
+            . '<dialog id="flm-config-dialog" class="flm-config-dialog" aria-labelledby="flm-config-dialog-title">'
+            . '<h3 id="flm-config-dialog-title">卸载并删除数据</h3>'
+            . '<p>此操作会永久删除全部 FriendLinks 数据并停用插件，无法撤销。</p>'
+            . '<div class="flm-config-dialog-actions">'
+            . '<button class="btn" id="flm-config-dialog-cancel" type="button">取消</button>'
+            . '<button class="btn btn-warn" id="flm-config-dialog-accept" type="button">确认删除</button>'
+            . '</div></dialog>'
             . '<script>(function(){function init(){'
             . 'var input=document.getElementById("flm-config-delete-confirmation");'
             . 'var button=document.getElementById("flm-config-uninstall");'
+            . 'var dialog=document.getElementById("flm-config-dialog");'
+            . 'var cancel=document.getElementById("flm-config-dialog-cancel");'
+            . 'var accept=document.getElementById("flm-config-dialog-accept");'
             . 'if(!input||!button||document.getElementById("flm-uninstall-form"))return;'
             . 'var target=document.createElement("form");target.id="flm-uninstall-form";'
             . 'target.method="post";target.action='
             . json_encode($uninstallUrl, JSON_UNESCAPED_SLASHES)
             . ';target.style.display="none";document.body.appendChild(target);'
             . 'input.addEventListener("input",function(){button.disabled=input.value!=="DELETE";});'
-            . 'target.addEventListener("submit",function(event){'
-            . 'if(input.value!=="DELETE"||!confirm("此操作会永久删除所有 FriendLinks 数据。继续？"))'
-            . '{event.preventDefault();}});}'
+            . 'button.addEventListener("click",function(){if(input.value!=="DELETE")return;'
+            . 'if(dialog.showModal){dialog.showModal();}else{dialog.setAttribute("open","");}});'
+            . 'cancel.addEventListener("click",function(){if(dialog.close){dialog.close();}'
+            . 'else{dialog.removeAttribute("open");}button.focus();});'
+            . 'accept.addEventListener("click",function(){target.submit();});'
+            . 'dialog.addEventListener("cancel",function(event){event.preventDefault();cancel.click();});}'
             . 'if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",init);}else{init();}'
             . '}());</script>'
         );
@@ -151,14 +183,18 @@ final class Plugin implements PluginInterface
         if ($isInit) {
             $backup = self::settingsBackup();
             if (null !== $backup) {
-                Settings::save($backup);
+                Settings::initialize($backup);
                 Db::get()->query(Db::get()->delete('table.options')
                     ->where('name = ?', self::SETTINGS_BACKUP_OPTION));
                 return;
             }
         }
 
-        Settings::save($isInit ? array_replace(Settings::defaults(), $settings) : Settings::all());
+        if ($isInit) {
+            Settings::initialize($settings);
+            return;
+        }
+        Settings::save(Settings::all());
     }
 
     public static function injectLinks($content, $widget, $lastResult = null)
@@ -174,7 +210,9 @@ final class Plugin implements PluginInterface
     private static function backupSettings(): void
     {
         $db = Db::get();
-        $value = serialize(Settings::all());
+        $settings = Settings::all();
+        $settings['worker_secret'] = '';
+        $value = serialize($settings);
         $updated = $db->query($db->update('table.options')->rows(['value' => $value])
             ->where('name = ?', self::SETTINGS_BACKUP_OPTION)->where('user = ?', 0));
         if (0 === $updated) {
@@ -205,95 +243,26 @@ final class Plugin implements PluginInterface
         return is_array($settings) ? $settings : null;
     }
 
-    private static function removeAdminRegistration(): void
+    private static function removeAdminRegistration(?int $menuIndex = null): void
     {
         $database = new Database();
         $db = $database->native();
-        $menuIndexRow = $database->fetchRowWrite($db->select('value')->from('table.options')
-            ->where('name = ?', self::MENU_INDEX_OPTION)->where('user = ?', 0)->limit(1));
-        $ownedMenuIndexes = [];
-        if ($menuIndexRow && preg_match('/^\d+$/D', (string) $menuIndexRow['value'])) {
-            $ownedMenuIndexes[(int) $menuIndexRow['value']] = true;
+        if (null === $menuIndex) {
+            $row = $database->fetchRowWrite($db->select('value')->from('table.options')
+                ->where('name = ?', self::MENU_INDEX_OPTION)->where('user = ?', 0)->limit(1));
+            $menuIndex = $row && preg_match('/^\d+$/D', (string) $row['value'])
+                ? (int) $row['value']
+                : null;
         }
 
-        $row = $database->fetchRowWrite($db->select('value')->from('table.options')
-            ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
-        if ($row) {
-            $panelTable = unserialize((string) $row['value'], ['allowed_classes' => false]);
-            if (is_array($panelTable)) {
-                $parents = is_array($panelTable['parent'] ?? null) ? $panelTable['parent'] : [];
-                $children = is_array($panelTable['child'] ?? null) ? $panelTable['child'] : [];
-                $files = is_array($panelTable['file'] ?? null) ? $panelTable['file'] : [];
-                foreach ($parents as $parentIndex => $name) {
-                    if (self::MENU_NAME === (string) $name) {
-                        $ownedMenuIndexes[(int) $parentIndex + 10] = true;
-                    }
-                }
-
-                $detectedMenuIndexes = [];
-                $removedPanelFiles = [];
-                foreach ($children as $menuIndex => $items) {
-                    if (!is_array($items)) {
-                        continue;
-                    }
-                    if (isset($ownedMenuIndexes[(int) $menuIndex])) {
-                        foreach ($items as $item) {
-                            $file = self::panelFileFromReference(
-                                is_array($item) ? (string) ($item[2] ?? '') : ''
-                            );
-                            if ('' !== $file) {
-                                $removedPanelFiles[$file] = true;
-                            }
-                        }
-                        unset($children[$menuIndex]);
-                        continue;
-                    }
-
-                    $remaining = [];
-                    foreach ($items as $item) {
-                        $url = is_array($item) ? (string) ($item[2] ?? '') : '';
-                        if (self::isOwnPanelReference($url)) {
-                            $detectedMenuIndexes[(int) $menuIndex] = true;
-                            $removedPanelFiles[self::panelFileFromReference($url)] = true;
-                            continue;
-                        }
-                        $remaining[] = $item;
-                    }
-                    if ($remaining) {
-                        $children[$menuIndex] = $remaining;
-                    } else {
-                        unset($children[$menuIndex]);
-                    }
-                }
-
-                foreach ($parents as $parentIndex => $name) {
-                    $menuIndex = (int) $parentIndex + 10;
-                    if (
-                        isset($ownedMenuIndexes[$menuIndex])
-                        || (isset($detectedMenuIndexes[$menuIndex]) && empty($children[$menuIndex]))
-                    ) {
-                        unset($parents[$parentIndex]);
-                    }
-                }
-
-                $panelTable['parent'] = $parents;
-                $panelTable['child'] = $children;
-                $panelTable['file'] = array_values(array_filter(
-                    $files,
-                    static function ($file) use ($removedPanelFiles) {
-                        $normalized = self::panelFileFromReference((string) $file);
-                        return !isset($removedPanelFiles[$normalized])
-                            && !self::isOwnPanelReference((string) $file);
-                    }
-                ));
-                $value = serialize($panelTable);
-                Helper::options()->panelTable = $value;
-                $db->query($db->update('table.options')->rows(['value' => $value])
-                    ->where('name = ?', 'panelTable')->where('user = ?', 0));
+        if (null !== $menuIndex) {
+            foreach (self::PANELS as $panel) {
+                Helper::removePanel($menuIndex, $panel);
             }
+            Helper::removeMenu(self::MENU_NAME);
         }
-
-        $db->query($db->delete('table.options')->where('name = ?', self::MENU_INDEX_OPTION));
+        $db->query($db->delete('table.options')
+            ->where('name = ?', self::MENU_INDEX_OPTION)->where('user = ?', 0));
     }
 
     private static function saveMenuIndex(int $menuIndex): void
@@ -306,30 +275,5 @@ final class Plugin implements PluginInterface
             'user' => 0,
             'value' => (string) $menuIndex,
         ]));
-    }
-
-    private static function isOwnPanelReference(string $reference): bool
-    {
-        return 0 === strpos(self::panelFileFromReference($reference), 'FriendLinks/panel/');
-    }
-
-    private static function panelFileFromReference(string $reference): string
-    {
-        $reference = html_entity_decode($reference, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $query = parse_url($reference, PHP_URL_QUERY);
-        if (is_string($query)) {
-            parse_str($query, $parameters);
-            if (isset($parameters['panel']) && is_string($parameters['panel'])) {
-                $reference = $parameters['panel'];
-            }
-        }
-        for ($attempt = 0; $attempt < 3; $attempt++) {
-            $decoded = rawurldecode($reference);
-            if ($decoded === $reference) {
-                break;
-            }
-            $reference = $decoded;
-        }
-        return trim($reference, '/');
     }
 }

@@ -66,14 +66,14 @@ Logo 方阵用于更强调站点标识的页面：隐藏描述，右上角仅保
 1. 从 [GitHub Releases](https://github.com/NHPT/FriendLinks/releases/latest) 下载最新稳定版 `FriendLinks.zip`，不要直接使用缺少 `vendor/` 的源码归档。
 2. 将目录放入 Typecho 的 `usr/plugins/`。
 3. 在 Typecho 后台启用 FriendLinks。
-4. 打开“友情链接 → 设置”，选择一个已发布的普通独立页面，或由插件创建页面。
-5. 配置系统 Cron。
+4. 在 Typecho 的“管理 → 独立页面”中创建普通页面，再到“友情链接 → 设置”选择并绑定。
+5. 在服务器或主机面板中手动配置一次系统 Cron。
 6. 如需主动告警，在“友情链接 → 通知”中配置渠道并发送测试通知。
 
 发布包已包含 Composer 依赖，生产服务器不需要执行 `composer install`。
 如果使用 Git 仓库源码，则必须先在插件目录执行 `composer install --no-dev --optimize-autoloader`，再将完整目录部署到服务器。
 
-首次添加友链时，打开“友情链接 → 友链”，点击“新增友链”，填写名称和 HTTP/HTTPS 地址；描述、Logo、分类和排序可选。有 cURL 时保持“公开”与“启用自动检测”，保存后启动一次 Worker；缺少 cURL 时关闭自动检测，友链仍可公开展示。
+首次添加友链时，打开“友情链接 → 友链”，点击“新增友链”，填写名称和 HTTP/HTTPS 地址；描述、Logo、分类和排序可选。保持“公开”与“启用自动检测”后，保存操作会立即返回列表，再由列表页自动发起独立的后台检测请求，状态列显示“检测中…”并在完成后刷新结果，不需要手动点击检测按钮。缺少 cURL 时关闭自动检测，友链仍可公开展示。
 
 承载页必须满足：
 
@@ -86,6 +86,10 @@ Logo 方阵用于更强调站点标识的页面：隐藏描述，右上角仅保
 
 ## 定时检测
 
+FriendLinks 默认使用并推荐 CLI Worker。签名 HTTP Worker 默认关闭，只作为无法运行 CLI Cron 时的兼容方案。
+
+Typecho 没有可靠的内建定时调度器，插件也不能安全、通用地修改 Linux crontab、宝塔计划任务或虚拟主机控制面板，因此系统 Cron 必须由管理员手动配置一次。插件停用后，已有 Cron 调用会在访问插件业务表和外部站点前自动空操作并返回成功；再次启用插件后，同一条 Cron 自动恢复，不需要删除或重建任务。
+
 ### CLI Cron
 
 推荐每 5 分钟运行一次：
@@ -94,7 +98,7 @@ Logo 方阵用于更强调站点标识的页面：隐藏描述，右上角仅保
 */5 * * * * php /path/to/typecho/usr/plugins/FriendLinks/bin/console.php check --due --limit=50 --max-seconds=240
 ```
 
-CLI Worker 只领取已到期任务。保存已启用自动检测的公开友链时，后台会立即检测该友链；列表中的“立即检测”和“完整复检”也会在当前后台请求中执行所选友链。批量检测受 30 秒运行预算限制，未完成部分仍保留为到期任务，随后由 Cron 或 HTTP Worker 继续处理。
+CLI Worker 只领取已到期任务。保存已启用自动检测的公开友链时，后台先将该友链标记为立即到期并返回列表，列表页随后自动发起独立检测请求，因此保存本身不会等待网络探测。浏览器请求未完成时，任务仍保持到期状态，由下一次 CLI Cron 或签名 HTTP Worker 接续处理。列表中的“立即检测”和“完整复检”是管理员明确触发的同步操作，受 30 秒运行预算限制。
 
 配置 Cron 前先在终端手动执行一次。成功时输出一行 JSON，包含 `claimed`、`completed`、`failed` 和 `notifications`；核心检测全部失败时返回非零退出码。Cron 应使用与站点一致的 PHP CLI 可执行文件，并保留错误日志，例如：
 
@@ -102,11 +106,18 @@ CLI Worker 只领取已到期任务。保存已启用自动检测的公开友链
 */5 * * * * /usr/bin/php /path/to/typecho/usr/plugins/FriendLinks/bin/console.php check --due --limit=50 --max-seconds=240 >> /var/log/friendlinks-worker.log 2>&1
 ```
 
-一次 `check` 同时处理到期检测和通知 Outbox，不需要额外的通知 Cron。
+一次 `check` 同时处理到期检测和通知 Outbox，不需要额外的通知 Cron。插件停用时命令输出 `{"status":"disabled",...}` 并以状态码 `0` 退出。
 
 ### 签名 HTTP Worker
 
-无法使用系统 Cron 时，可以调用设置页显示的 HTTP Worker 入口。该入口只接受 HTTPS `POST`，并要求：
+无法使用系统 Cron 时，可以手动启用签名 HTTP Worker。配置顺序：
+
+1. 使用 `openssl rand -hex 32` 生成密钥。
+2. 在“友情链接 → 设置 → HTTP Worker”输入两次新密钥并确认轮换。
+3. 把同一密钥保存到外部调用脚本的环境变量或密钥管理系统。
+4. 勾选“启用签名 HTTP Worker”并保存设置。
+
+未启用时，HTTP Worker 返回 `403 worker_disabled`，不会执行检测或通知投递。启用后的入口只接受 HTTPS `POST`，并要求：
 
 ```text
 X-FLM-Timestamp
@@ -124,7 +135,7 @@ Unix 时间戳
 SHA-256(请求体)
 ```
 
-使用插件生成并保存在服务端的密钥计算 HMAC-SHA256。密钥不会回显到后台页面源码中；需要变更时在设置页轮换。时间窗口为 5 分钟，同一 nonce 只能使用一次。HTTP Worker 单次最多处理 5 条友链，目标运行预算为 20 秒。
+插件首次启用时随机生成并持久化密钥，普通停用和再次启用不会替换。密钥不会回显到后台页面源码中；启用 HTTP Worker 前，应在设置页输入两次由 `openssl rand -hex 32` 等方式生成的新密钥，再把同一密钥配置到外部调用脚本。轮换后旧密钥立即失效，外部调用方必须同步更新。时间窗口为 5 分钟，同一 nonce 只能使用一次。HTTP Worker 单次最多处理 5 条友链，目标运行预算为 20 秒。
 
 `request path` 只取 Worker URL 的路径部分，不包含域名和查询串；签名输出为 64 位小写十六进制字符串。请求体可以使用空 JSON 对象。下面的 PHP 示例可直接放入定时脚本：
 
@@ -287,12 +298,12 @@ SMTP 支持：
 
 - STARTTLS
 - SMTPS
-- 无加密连接
-- 可选 SMTP 用户名与密码
+- 无认证的本地明文中继
+- STARTTLS/SMTPS 下可配置 SMTP 用户名与密码
 - 最多 20 个收件地址
 - 自定义发件地址和发件人名称
 
-邮件由 PHPMailer 发送，TLS 模式始终校验证书。后台不会回显已保存的 SMTP 密码。
+邮件由 PHPMailer 发送，TLS 模式始终校验证书。只要填写 SMTP 用户名或密码，就必须选择 STARTTLS 或 SMTPS；无加密模式不会发送认证凭据。后台不会回显已保存的 SMTP 密码。
 
 配置顺序：
 
@@ -408,7 +419,7 @@ flm_notification_outbox
 激活时自动按当前数据库执行版本化迁移，不需要手动导入 SQL。当前 Schema 版本为 `2`。
 
 - 停用：移除菜单、路由、Action 和前端钩子，保留表、友链、历史及通知配置。
-- 再启用：自动恢复停用前配置并继续使用原数据。
+- 再启用：自动恢复停用前配置并继续使用原数据；`friendlinks_worker_secret` 独立保存在数据库中，不会因停用而变化。
 - 显式卸载：在 Typecho“控制台 → 插件 → FriendLinks 设置”中输入 `DELETE` 后，才删除插件表和配置。
 
 MySQL 插件表必须全部使用 InnoDB，以保证检测结果、历史和通知事件的事务一致性。
@@ -455,7 +466,7 @@ TYPECHO_TEST_ROOT=/path/to/typecho php tests/typecho-integration.php
 - PHP 7.4、8.2、8.4、8.5
 - Typecho 1.2.1
 - SQLite 完整集成测试
-- MySQL 8.4 与 PostgreSQL 16 迁移及重复执行
+- MariaDB 11 与 PostgreSQL 16 的迁移、同值续租和幂等调度
 - Composer 依赖漏洞扫描
 - 桌面端与移动端浏览器布局、Logo 裁切和悬停状态
 

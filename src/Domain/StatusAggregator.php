@@ -20,11 +20,15 @@ final class StatusAggregator
             'untrusted' => 'tls_untrusted',
         ];
         $tlsState = (string) ($tls['state'] ?? '');
+        $failureReason = $this->availabilityFailureReason($dns, $http, $tls);
         if (isset($immediateTls[$tlsState])) {
-            return $this->result('down', $immediateTls[$tlsState], $oldFailures + 1, false, $now);
+            $dnsState = (string) ($dns['state'] ?? '');
+            $reason = in_array($dnsState, ['blocked', 'failed'], true)
+                ? $failureReason
+                : $immediateTls[$tlsState];
+            return $this->result('down', $reason, $oldFailures + 1, false, $now);
         }
 
-        $failureReason = $this->availabilityFailureReason($dns, $http, $tls);
         $mainSuccess = 'healthy' === ($dns['state'] ?? null)
             && in_array($http['state'] ?? null, ['healthy', 'restricted'], true)
             && !in_array($tlsState, ['handshake_failed'], true);
@@ -92,6 +96,31 @@ final class StatusAggregator
             'client_error' => 'http_client_error',
         ];
         $state = (string) ($http['state'] ?? '');
+        $reason = (string) ($http['reason_code'] ?? '');
+        if (
+            'network_error' === $state
+            && in_array($reason, [
+                'http_timeout',
+                'http_unreachable',
+                'dns_failed',
+                'dns_blocked_target',
+                'dns_rebinding_detected',
+                'idn_unsupported',
+            ], true)
+        ) {
+            return $reason;
+        }
+        if (
+            'redirect_error' === $state
+            && in_array($reason, [
+                'http_redirect_loop',
+                'http_redirect_limit',
+                'http_redirect_missing_location',
+                'http_redirect_invalid',
+            ], true)
+        ) {
+            return $reason;
+        }
         return $httpReasons[$state] ?? null;
     }
 

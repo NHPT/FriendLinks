@@ -1,7 +1,6 @@
 <?php
 
 use Typecho\Common;
-use Typecho\Db;
 use TypechoPlugin\FriendLinks\Application\ImportService;
 use TypechoPlugin\FriendLinks\Application\LinkService;
 use TypechoPlugin\FriendLinks\Application\NotificationDispatcher;
@@ -38,6 +37,9 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
                 case 'schedule':
                     $this->schedule();
                     break;
+                case 'run-check':
+                    $this->runCheck();
+                    return;
                 case 'save-category':
                     $this->saveCategory();
                     break;
@@ -59,12 +61,6 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
                 case 'retry-notification':
                     $this->retryNotification();
                     break;
-                case 'create-page':
-                    $this->createPage();
-                    break;
-                case 'clear-page-template':
-                    $this->clearPageTemplate();
-                    break;
                 case 'import':
                     $this->import();
                     break;
@@ -72,8 +68,7 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
                     $this->export();
                     return;
                 case 'rotate-secret':
-                    Settings::rotateWorkerSecret();
-                    Notice::alloc()->set('HTTP Worker 密钥已轮换。', 'success');
+                    $this->rotateWorkerSecret();
                     break;
                 case 'uninstall':
                     $this->uninstall();
@@ -90,6 +85,10 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
 
     public function worker()
     {
+        if (empty(Settings::get('http_worker_enabled', 0))) {
+            $this->json(['error' => 'worker_disabled'], 403);
+            return;
+        }
         $body = (string) file_get_contents('php://input');
         if (strlen($body) > 65536) {
             $this->json(['error' => 'payload_too_large'], 413);
@@ -132,24 +131,20 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
             'visibility' => $this->request->get('visibility', 'published'),
             'check_enabled' => $this->request->get('check_enabled', 0),
         ], $id);
-        $link = $repositories->link($saved);
+        $link = $repositories->link($saved, true);
         $message = $id > 0 ? '友链已更新。' : '友链已创建。';
-        $noticeType = 'success';
         if ($link && !empty($link['check_enabled']) && 'published' === $link['visibility']) {
             $repositories->schedule([$saved], true);
-            $result = (new Worker($repositories))->run('admin', 1, 30, [$saved]);
-            if ($result['completed'] > 0) {
-                $message = ($id > 0 ? '友链已更新' : '友链已创建') . '并完成检测。';
-            } else {
-                $message = ($id > 0 ? '友链已更新' : '友链已创建')
-                    . '，但即时检测未完成，请查看健康页运行摘要。';
-                $noticeType = 'notice';
-            }
+            $message = ($id > 0 ? '友链已更新' : '友链已创建') . '，已加入检测队列。';
         }
-        Notice::alloc()->set($message, $noticeType);
+        Notice::alloc()->set($message, 'success');
         Notice::alloc()->highlight('friend-link-' . $saved);
+        $redirect = 'extending.php?panel=FriendLinks/panel/links.php';
+        if ($link && !empty($link['check_enabled']) && 'published' === $link['visibility']) {
+            $redirect .= '&auto_check=' . $saved;
+        }
         $this->response->redirect(Common::url(
-            'extending.php?panel=FriendLinks/panel/link-edit.php&id=' . $saved,
+            $redirect,
             $this->options->adminUrl
         ));
     }
@@ -195,6 +190,30 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
         );
     }
 
+    private function runCheck(): void
+    {
+        try {
+            $id = (int) $this->request->get('id', 0);
+            $repositories = new Repositories();
+            $link = $id > 0 ? $repositories->link($id, true) : null;
+            if (!$link || empty($link['check_enabled']) || 'published' !== $link['visibility']) {
+                throw new InvalidArgumentException('该友链未启用自动检测。');
+            }
+            $repositories->schedule([$id], true);
+            $result = (new Worker($repositories))->run('admin', 1, 30, [$id]);
+            $this->json([
+                'ok' => $result['completed'] > 0,
+                'completed' => $result['completed'],
+                'failed' => $result['failed'],
+            ], $result['completed'] > 0 ? 200 : 503);
+        } catch (Throwable $error) {
+            $this->json([
+                'ok' => false,
+                'error' => htmlspecialchars($error->getMessage(), ENT_QUOTES, 'UTF-8'),
+            ], 422);
+        }
+    }
+
     private function saveCategory(): void
     {
         $id = max(0, (int) $this->request->get('id', 0));
@@ -210,10 +229,10 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
     private function deleteCategory(): void
     {
         $id = (int) $this->request->get('id', 0);
-        if ($id < 1 || !(new Repositories())->category($id)) {
+        $repositories = new Repositories();
+        if ($id < 1 || !$repositories->deleteCategory($id)) {
             throw new InvalidArgumentException('分类不存在。');
         }
-        (new Repositories())->deleteCategory($id);
         Notice::alloc()->set('分类已删除，原友链已转为未分类。', 'success');
     }
 
@@ -234,6 +253,7 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
             'show_expiration_warning' => $this->request->get('show_expiration_warning', 0),
             'rel_noreferrer' => $this->request->get('rel_noreferrer', 0),
             'rel_nofollow' => $this->request->get('rel_nofollow', 0),
+            'http_worker_enabled' => $this->request->get('http_worker_enabled', 0),
         ]);
         Settings::save($settings);
         Notice::alloc()->set('设置已保存。', 'success');
@@ -302,65 +322,15 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
         Notice::alloc()->set('通知已重新进入待发送队列。', 'success');
     }
 
-    private function createPage(): void
+    private function rotateWorkerSecret(): void
     {
-        $currentCid = (int) Settings::get('page_cid', 0);
-        if ($currentCid > 0) {
-            $hasValidPage = false;
-            try {
-                Settings::assertPage($currentCid);
-                $hasValidPage = true;
-            } catch (InvalidArgumentException $ignored) {
-            }
-            if ($hasValidPage) {
-                throw new InvalidArgumentException('当前已有有效承载页，请勿重复创建。');
-            }
+        $secret = trim((string) $this->request->get('worker_secret_new', ''));
+        $confirmation = trim((string) $this->request->get('worker_secret_confirmation', ''));
+        if ('' === $secret || !hash_equals($secret, $confirmation)) {
+            throw new InvalidArgumentException('两次输入的 HTTP Worker 密钥不一致。');
         }
-
-        $db = Db::get();
-        $base = 'friends';
-        $slug = $base;
-        $suffix = 2;
-        while ($db->fetchRow($db->select('cid')->from('table.contents')->where('slug = ?', $slug)->limit(1))) {
-            $slug = $base . '-' . $suffix++;
-        }
-        $now = time();
-        $cid = (int) $db->query($db->insert('table.contents')->rows([
-            'title' => '友情链接',
-            'slug' => $slug,
-            'created' => $now,
-            'modified' => $now,
-            'text' => '<p>这里收录值得访问的网站。</p>',
-            'order' => 0,
-            'authorId' => (int) $this->user->uid,
-            'template' => null,
-            'type' => 'page',
-            'status' => 'publish',
-            'password' => null,
-            'commentsNum' => 0,
-            'allowComment' => 0,
-            'allowPing' => 0,
-            'allowFeed' => 1,
-            'parent' => 0,
-        ]));
-        $settings = Settings::all();
-        $settings['page_cid'] = $cid;
-        Settings::save($settings);
-        Notice::alloc()->set('普通独立页面已创建并绑定。', 'success');
-    }
-
-    private function clearPageTemplate(): void
-    {
-        $cid = (int) $this->request->get('cid', 0);
-        $db = Db::get();
-        $page = $db->fetchRow($db->select('cid', 'type')->from('table.contents')
-            ->where('cid = ?', $cid)->limit(1));
-        if (!$page || 'page' !== $page['type']) {
-            throw new InvalidArgumentException('页面不存在。');
-        }
-        $db->query($db->update('table.contents')->rows(['template' => null, 'modified' => time()])
-            ->where('cid = ?', $cid));
-        Notice::alloc()->set('页面自定义模板已清除，请确认页面显示后再绑定。', 'success');
+        Settings::rotateWorkerSecret($secret);
+        Notice::alloc()->set('HTTP Worker 密钥已轮换。', 'success');
     }
 
     private function import(): void

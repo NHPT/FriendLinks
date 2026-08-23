@@ -53,7 +53,14 @@ if ($request->isPost()) {
           </div>
           <form method="post" action="<?php echo flm_e(flm_action_url('import')); ?>">
             <textarea name="rows_json" hidden><?php echo flm_e(json_encode($preview, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)); ?></textarea>
-            <button class="btn primary" type="submit" onclick="return confirm('确认写入预览中的有效友链？')">确认导入</button>
+            <button
+              class="btn primary"
+              type="submit"
+              data-flm-confirm
+              data-flm-confirm-title="确认导入"
+              data-flm-confirm-message="确认写入预览中的有效友链？"
+              data-flm-confirm-label="开始导入"
+            >确认导入</button>
           </form>
         <?php endif; ?>
 

@@ -3,6 +3,7 @@
 namespace TypechoPlugin\FriendLinks\Infrastructure;
 
 use Typecho\Db;
+use TypechoPlugin\FriendLinks\Domain\Text;
 
 final class Repositories
 {
@@ -45,6 +46,24 @@ final class Repositories
             : $this->db->fetchRow($query);
     }
 
+    public function categoryForUpdate(int $id): ?array
+    {
+        if (!$this->database->inTransaction()) {
+            throw new \LogicException('Category locks require an active transaction.');
+        }
+        if ('sqlite' === $this->database->driver()) {
+            return $this->database->fetchRowWrite(
+                $this->db->select()->from('table.flm_categories')->where('id = ?', $id)->limit(1)
+            );
+        }
+
+        $quote = 'mysql' === $this->database->driver() ? '`' : '"';
+        $table = $quote . $this->database->prefix() . 'flm_categories' . $quote;
+        return $this->database->fetchRowWrite(
+            'SELECT * FROM ' . $table . ' WHERE ' . $quote . 'id' . $quote . ' = ' . $id . ' FOR UPDATE'
+        );
+    }
+
     public function saveCategory(array $row, int $id = 0): int
     {
         if ($id > 0) {
@@ -54,13 +73,17 @@ final class Repositories
         return (int) $this->db->query($this->db->insert('table.flm_categories')->rows($row));
     }
 
-    public function deleteCategory(int $id): void
+    public function deleteCategory(int $id): bool
     {
-        $this->database->transaction(function () use ($id) {
+        return $this->database->transaction(function () use ($id) {
+            if (!$this->categoryForUpdate($id)) {
+                return false;
+            }
             $this->db->query($this->db->update('table.flm_links')
                 ->rows(['category_id' => null, 'updated_at' => time()])
                 ->where('category_id = ?', $id));
             $this->db->query($this->db->delete('table.flm_categories')->where('id = ?', $id));
+            return true;
         });
     }
 
@@ -90,12 +113,14 @@ final class Repositories
             $query->where('table.flm_current_status.overall_state = ?', $filters['state']);
         }
         if (!empty($filters['keywords'])) {
-            $keyword = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $filters['keywords']) . '%';
+            $contains = 'pgsql' === $this->database->driver() ? 'STRPOS(%s, ?) > 0' : 'INSTR(%s, ?) > 0';
             $query->where(
-                'table.flm_links.name LIKE ? OR table.flm_links.url LIKE ? OR table.flm_links.description LIKE ?',
-                $keyword,
-                $keyword,
-                $keyword
+                '(' . sprintf($contains, 'table.flm_links.name')
+                    . ' OR ' . sprintf($contains, 'table.flm_links.url')
+                    . ' OR ' . sprintf($contains, 'table.flm_links.description') . ')',
+                $filters['keywords'],
+                $filters['keywords'],
+                $filters['keywords']
             );
         }
 
@@ -137,9 +162,9 @@ final class Repositories
             ->order('table.flm_links.id', Db::SORT_ASC));
     }
 
-    public function link(int $id): ?array
+    public function link(int $id, bool $fromWrite = false): ?array
     {
-        return $this->db->fetchRow($this->db->select(
+        $query = $this->db->select(
             'table.flm_links.*',
             'table.flm_current_status.overall_state',
             'table.flm_current_status.reason_code',
@@ -148,7 +173,10 @@ final class Repositories
         )->from('table.flm_links')
             ->join('table.flm_current_status', 'table.flm_links.id = table.flm_current_status.link_id', Db::LEFT_JOIN)
             ->where('table.flm_links.id = ?', $id)
-            ->limit(1));
+            ->limit(1);
+        return $fromWrite || $this->database->inTransaction()
+            ? $this->database->fetchRowWrite($query)
+            : $this->db->fetchRow($query);
     }
 
     public function findByHash(string $hash, int $excludeId = 0): ?array
@@ -239,24 +267,36 @@ final class Repositories
 
     public function archiveLinks(array $ids): int
     {
-        $count = 0;
-        foreach (array_slice(array_unique(array_map('intval', $ids)), 0, 100) as $id) {
-            if ($id < 1) {
-                continue;
+        $ids = array_slice(array_unique(array_filter(array_map('intval', $ids), static function ($id) {
+            return $id > 0;
+        })), 0, 100);
+        sort($ids, SORT_NUMERIC);
+
+        return $this->database->transaction(function () use ($ids) {
+            $count = 0;
+            $now = time();
+            foreach ($ids as $id) {
+                $link = $this->database->fetchRowWrite(
+                    $this->db->select('id')->from('table.flm_links')->where('id = ?', $id)->limit(1)
+                );
+                if (!$link) {
+                    continue;
+                }
+                $this->db->query($this->db->update('table.flm_links')->rows([
+                    'visibility' => 'archived',
+                    'check_enabled' => 0,
+                    'updated_at' => $now,
+                ])->where('id = ?', $id));
+                $this->db->query($this->db->update('table.flm_current_status')->rows([
+                    'overall_state' => 'disabled',
+                    'lease_token' => null,
+                    'lease_until' => null,
+                    'state_changed_at' => $now,
+                ])->where('link_id = ?', $id));
+                $count++;
             }
-            $count += (int) $this->db->query($this->db->update('table.flm_links')->rows([
-                'visibility' => 'archived',
-                'check_enabled' => 0,
-                'updated_at' => time(),
-            ])->where('id = ?', $id));
-            $this->db->query($this->db->update('table.flm_current_status')->rows([
-                'overall_state' => 'disabled',
-                'lease_token' => null,
-                'lease_until' => null,
-                'state_changed_at' => time(),
-            ])->where('link_id = ?', $id));
-        }
-        return $count;
+            return $count;
+        });
     }
 
     public function deleteLink(int $id): bool
@@ -282,24 +322,47 @@ final class Repositories
 
     public function schedule(array $ids, bool $full = false): int
     {
-        $count = 0;
-        foreach (array_slice(array_unique(array_map('intval', $ids)), 0, 100) as $id) {
-            if ($id < 1) {
-                continue;
+        $ids = array_slice(array_unique(array_filter(array_map('intval', $ids), static function ($id) {
+            return $id > 0;
+        })), 0, 100);
+        sort($ids, SORT_NUMERIC);
+
+        return $this->database->transaction(function () use ($ids, $full) {
+            $count = 0;
+            foreach ($ids as $id) {
+                $candidate = $this->database->fetchRowWrite($this->db->select(
+                    'table.flm_current_status.link_id'
+                )->from('table.flm_current_status')
+                    ->join(
+                        'table.flm_links',
+                        'table.flm_current_status.link_id = table.flm_links.id',
+                        Db::INNER_JOIN
+                    )
+                    ->where('table.flm_current_status.link_id = ?', $id)
+                    ->where('table.flm_links.visibility = ?', 'published')
+                    ->where('table.flm_links.check_enabled = ?', 1)
+                    ->limit(1));
+                if (!$candidate) {
+                    continue;
+                }
+
+                $rows = [
+                    'dns_next_check_at' => 0,
+                    'http_next_check_at' => 0,
+                    'tls_next_check_at' => 0,
+                    'next_check_at' => 0,
+                    'lease_token' => null,
+                    'lease_until' => null,
+                ];
+                if ($full) {
+                    $rows['domain_next_check_at'] = 0;
+                }
+                $this->db->query($this->db->update('table.flm_current_status')
+                    ->rows($rows)->where('link_id = ?', $id));
+                $count++;
             }
-            $rows = [
-                'dns_next_check_at' => 0,
-                'http_next_check_at' => 0,
-                'tls_next_check_at' => 0,
-                'next_check_at' => 0,
-            ];
-            if ($full) {
-                $rows['domain_next_check_at'] = 0;
-            }
-            $count += (int) $this->db->query($this->db->update('table.flm_current_status')
-                ->rows($rows)->where('link_id = ?', $id));
-        }
-        return $count;
+            return $count;
+        });
     }
 
     public function dueCandidates(int $now, int $limit): array
@@ -397,11 +460,22 @@ final class Repositories
 
     public function renewLease(int $linkId, string $token, int $now, int $leaseUntil): bool
     {
-        return 1 === $this->db->query($this->db->update('table.flm_current_status')->rows([
+        $affected = $this->db->query($this->db->update('table.flm_current_status')->rows([
             'lease_until' => $leaseUntil,
         ])->where('link_id = ?', $linkId)
             ->where('lease_token = ?', $token)
             ->where('lease_until >= ?', $now));
+        if (1 === $affected) {
+            return true;
+        }
+
+        return null !== $this->database->fetchRowWrite(
+            $this->db->select('link_id')->from('table.flm_current_status')
+                ->where('link_id = ?', $linkId)
+                ->where('lease_token = ?', $token)
+                ->where('lease_until >= ?', $now)
+                ->limit(1)
+        );
     }
 
     public function createRun(string $runId, string $mode, int $now): void
@@ -509,7 +583,7 @@ final class Repositories
             'available_at' => $availableAt,
             'lease_token' => null,
             'lease_until' => null,
-            'last_error' => substr($error, 0, 500),
+            'last_error' => Text::truncateUtf8($error, 500),
         ]);
         if ($terminal) {
             $query->expression('attempts', '5', false);
@@ -572,9 +646,17 @@ final class Repositories
     public function backlog(int $now): array
     {
         $due = $this->db->fetchRow($this->db->select('COUNT(*) AS total')
-            ->from('table.flm_current_status')->where('next_check_at <= ?', $now));
+            ->from('table.flm_current_status')
+            ->join('table.flm_links', 'table.flm_current_status.link_id = table.flm_links.id', Db::INNER_JOIN)
+            ->where('table.flm_links.visibility = ?', 'published')
+            ->where('table.flm_links.check_enabled = ?', 1)
+            ->where('table.flm_current_status.next_check_at <= ?', $now));
         $leased = $this->db->fetchRow($this->db->select('COUNT(*) AS total')
-            ->from('table.flm_current_status')->where('lease_until >= ?', $now));
+            ->from('table.flm_current_status')
+            ->join('table.flm_links', 'table.flm_current_status.link_id = table.flm_links.id', Db::INNER_JOIN)
+            ->where('table.flm_links.visibility = ?', 'published')
+            ->where('table.flm_links.check_enabled = ?', 1)
+            ->where('table.flm_current_status.lease_until >= ?', $now));
         return ['due' => (int) ($due['total'] ?? 0), 'leased' => (int) ($leased['total'] ?? 0)];
     }
 
@@ -724,4 +806,5 @@ final class Repositories
             }
         }
     }
+
 }

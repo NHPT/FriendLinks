@@ -33,18 +33,28 @@ final class RdapProbe
 
     public function probe(string $url, array $settings, ?float $deadline = null): array
     {
-        $this->refreshSuffixes($settings, $deadline);
         $host = trim((string) parse_url($url, PHP_URL_HOST), '[]');
         if (filter_var($host, FILTER_VALIDATE_IP)) {
             return ['state' => 'not_applicable', 'expires_at' => null, 'domain' => null];
         }
 
         $domain = $this->suffixes->registrableDomain($host);
+        $now = time();
+        if (null !== $domain) {
+            $cached = $this->repositories->cacheGet('rdap_domain', $domain, $now);
+            if (null !== $cached) {
+                $decoded = json_decode($cached, true);
+                if (is_array($decoded)) {
+                    return $decoded;
+                }
+            }
+        }
+
+        $this->refreshSuffixes($settings, $deadline);
+        $domain = $this->suffixes->registrableDomain($host);
         if (null === $domain) {
             return ['state' => 'unsupported', 'expires_at' => null, 'domain' => null];
         }
-
-        $now = time();
         $cached = $this->repositories->cacheGet('rdap_domain', $domain, $now);
         if (null !== $cached) {
             $decoded = json_decode($cached, true);

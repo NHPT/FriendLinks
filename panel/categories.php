@@ -66,8 +66,15 @@ $editing = $editing ?: ['name' => '', 'slug' => '', 'sort_order' => 0, 'enabled'
                 <td>
                   <div class="flm-row-actions">
                     <a class="btn btn-s" href="<?php echo flm_e(flm_panel_url('categories', ['id' => (int) $category['id']])); ?>">编辑</a>
-                    <form method="post" action="<?php echo flm_e(flm_action_url('delete-category', ['id' => (int) $category['id']])); ?>" onsubmit="return confirm('删除分类后，原友链将转为未分类。继续？')">
-                      <button class="btn btn-s btn-warn" type="submit">删除</button>
+                    <form method="post" action="<?php echo flm_e(flm_action_url('delete-category', ['id' => (int) $category['id']])); ?>">
+                      <button
+                        class="btn btn-s btn-warn"
+                        type="submit"
+                        data-flm-confirm
+                        data-flm-confirm-title="删除分类"
+                        data-flm-confirm-message="删除分类后，其中的友链将转为未分类。"
+                        data-flm-confirm-label="确认删除"
+                      >删除</button>
                     </form>
                   </div>
                 </td>

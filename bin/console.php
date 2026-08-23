@@ -33,6 +33,14 @@ foreach (array_slice($argv, 2) as $argument) {
     }
 }
 
+if (!\Typecho\Plugin::exists('FriendLinks')) {
+    fwrite(STDOUT, json_encode([
+        'status' => 'disabled',
+        'message' => 'FriendLinks is disabled; nothing to do.',
+    ], JSON_UNESCAPED_SLASHES) . PHP_EOL);
+    exit(0);
+}
+
 $result = (new Worker())->run('cli', $limit, $maxSeconds);
 fwrite(STDOUT, json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL);
 exit($result['failed'] > 0 && 0 === $result['completed'] ? 1 : 0);

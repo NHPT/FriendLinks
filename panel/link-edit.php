@@ -1,7 +1,6 @@
 <?php
 
 use TypechoPlugin\FriendLinks\Infrastructure\Repositories;
-use TypechoPlugin\FriendLinks\Presentation\StatusLabels;
 
 require __DIR__ . '/_bootstrap.php';
 
@@ -20,10 +19,6 @@ $link = $link ?: [
     'sort_order' => 0,
     'visibility' => 'published',
     'check_enabled' => 1,
-    'overall_state' => 'pending',
-    'reason_code' => null,
-    'checked_at' => null,
-    'details_json' => null,
 ];
 ?>
 <div class="main flm-admin">
@@ -75,12 +70,6 @@ $link = $link ?: [
             </div>
           </div>
         </form>
-
-        <?php if ($id): ?>
-          <h3>最近状态</h3>
-          <p><span class="flm-state flm-state-<?php echo flm_e($link['overall_state']); ?>"><?php echo flm_e(StatusLabels::state($link['overall_state'])); ?></span>
-            <?php echo $link['checked_at'] ? ' · ' . flm_e(date('Y-m-d H:i:s', (int) $link['checked_at'])) : ''; ?></p>
-        <?php endif; ?>
       </div>
     </div>
   </div>

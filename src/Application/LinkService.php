@@ -21,24 +21,26 @@ final class LinkService
 
     public function save(array $input, int $id = 0): int
     {
-        [$row, $existing] = $this->prepareLink($input, $id);
-        $now = time();
-        $row['updated_at'] = $now;
+        return $this->repositories->transaction(function () use ($input, $id) {
+            [$row, $existing] = $this->prepareLink($input, $id, true);
+            $now = time();
+            $row['updated_at'] = $now;
 
-        if ($id > 0) {
-            $resetStatus = !empty($row['check_enabled'])
-                && 'published' === $row['visibility']
-                && (
-                    (string) $existing['normalized_url'] !== $row['normalized_url']
-                    || empty($existing['check_enabled'])
-                    || 'published' !== (string) $existing['visibility']
-                );
-            $this->repositories->updateLink($id, $row, $resetStatus);
-            return $id;
-        }
+            if ($id > 0) {
+                $resetStatus = !empty($row['check_enabled'])
+                    && 'published' === $row['visibility']
+                    && (
+                        (string) $existing['normalized_url'] !== $row['normalized_url']
+                        || empty($existing['check_enabled'])
+                        || 'published' !== (string) $existing['visibility']
+                    );
+                $this->repositories->updateLink($id, $row, $resetStatus);
+                return $id;
+            }
 
-        $row['created_at'] = $now;
-        return $this->repositories->createLink($row);
+            $row['created_at'] = $now;
+            return $this->repositories->createLink($row);
+        });
     }
 
     public function validate(array $input, int $id = 0): void
@@ -46,9 +48,9 @@ final class LinkService
         $this->prepareLink($input, $id);
     }
 
-    private function prepareLink(array $input, int $id): array
+    private function prepareLink(array $input, int $id, bool $lockCategory = false): array
     {
-        $existing = $id > 0 ? $this->repositories->link($id) : null;
+        $existing = $id > 0 ? $this->repositories->link($id, true) : null;
         if ($id > 0 && !$existing) {
             throw new \InvalidArgumentException('友链不存在。');
         }
@@ -77,7 +79,12 @@ final class LinkService
         }
 
         $categoryId = max(0, (int) ($input['category_id'] ?? 0));
-        if ($categoryId > 0 && !$this->repositories->category($categoryId)) {
+        $category = $categoryId > 0
+            ? ($lockCategory
+                ? $this->repositories->categoryForUpdate($categoryId)
+                : $this->repositories->category($categoryId))
+            : null;
+        if ($categoryId > 0 && !$category) {
             throw new \InvalidArgumentException('所选分类不存在。');
         }
 
@@ -150,6 +157,10 @@ final class LinkService
 
     private function length(string $value): int
     {
-        return function_exists('mb_strlen') ? mb_strlen($value, 'UTF-8') : strlen($value);
+        if (function_exists('mb_strlen')) {
+            return mb_strlen($value, 'UTF-8');
+        }
+        $length = preg_match_all('/./us', $value, $matches);
+        return false === $length ? PHP_INT_MAX : $length;
     }
 }

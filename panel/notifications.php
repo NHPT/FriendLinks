@@ -96,7 +96,7 @@ $placeholders = array_map(static function ($name) {
           </section>
 
           <section class="flm-notification-panel" data-flm-notification-panel="email" hidden>
-            <div class="flm-section-head"><div><h3>SMTP 邮件</h3><p>支持 STARTTLS、SMTPS 和不加密连接，始终校验证书。</p></div></div>
+            <div class="flm-section-head"><div><h3>SMTP 邮件</h3><p>支持 STARTTLS、SMTPS，以及无认证的本地明文中继。</p></div></div>
             <p><label class="flm-check"><input type="checkbox" name="email_enabled" value="1"<?php echo $settings['email_enabled'] ? ' checked' : ''; ?>> 启用 SMTP 邮件</label></p>
             <div class="flm-field-grid flm-field-grid-three">
               <div class="flm-field">
@@ -112,7 +112,7 @@ $placeholders = array_map(static function ($name) {
                 <select id="flm-smtp-encryption" name="smtp_encryption">
                   <option value="starttls"<?php echo 'starttls' === $settings['smtp_encryption'] ? ' selected' : ''; ?>>STARTTLS</option>
                   <option value="smtps"<?php echo 'smtps' === $settings['smtp_encryption'] ? ' selected' : ''; ?>>SMTPS</option>
-                  <option value="none"<?php echo 'none' === $settings['smtp_encryption'] ? ' selected' : ''; ?>>无</option>
+                  <option value="none"<?php echo 'none' === $settings['smtp_encryption'] ? ' selected' : ''; ?>>无（仅无认证本地中继）</option>
                 </select>
               </div>
             </div>
@@ -133,7 +133,7 @@ $placeholders = array_map(static function ($name) {
             </div>
             <label for="flm-email-recipients">收件地址</label>
             <input id="flm-email-recipients" type="text" name="email_recipients" value="<?php echo flm_e($settings['email_recipients']); ?>" placeholder="admin@example.com, ops@example.com">
-            <p class="flm-help">最多 20 个地址，使用逗号、分号或空格分隔。SMTP 始终校验证书，不提供关闭验证的选项。</p>
+            <p class="flm-help">最多 20 个地址，使用逗号、分号或空格分隔。填写用户名或密码时必须使用 STARTTLS 或 SMTPS。</p>
             <button class="btn" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'email'])); ?>" formnovalidate<?php echo empty($settings['email_enabled']) ? ' disabled' : ''; ?>>测试已保存配置</button>
           </section>
 

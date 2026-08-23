@@ -5,6 +5,7 @@ namespace TypechoPlugin\FriendLinks\Application;
 use TypechoPlugin\FriendLinks\Domain\StatusAggregator;
 use TypechoPlugin\FriendLinks\Domain\TargetException;
 use TypechoPlugin\FriendLinks\Domain\TargetPolicy;
+use TypechoPlugin\FriendLinks\Domain\Text;
 use TypechoPlugin\FriendLinks\Infrastructure\RdapProbe;
 use TypechoPlugin\FriendLinks\Infrastructure\Repositories;
 use TypechoPlugin\FriendLinks\Infrastructure\SafeHttpClient;
@@ -69,18 +70,26 @@ final class Worker
         $counts = ['claimed' => 0, 'completed' => 0, 'failed' => 0];
         $errors = [];
         $notificationCounts = ['claimed' => 0, 'sent' => 0, 'failed' => 0, 'errors' => []];
-        $this->repositories->createRun($runId, $mode, $startedAt);
+        $runCreated = false;
 
         try {
+            $this->repositories->createRun($runId, $mode, $startedAt);
+            $runCreated = true;
             if (!extension_loaded('curl')) {
                 throw new \RuntimeException('PHP cURL 扩展未安装，自动检测不可用。');
             }
 
-            $candidates = $linkIds
-                ? array_map(static function ($linkId) {
-                    return ['link_id' => $linkId];
-                }, $linkIds)
-                : $this->repositories->dueCandidates($startedAt, $limit);
+            if ($linkIds) {
+                $candidates = [];
+                foreach ($linkIds as $linkId) {
+                    $link = $this->repositories->link($linkId, true);
+                    if ($link && 'published' === $link['visibility'] && !empty($link['check_enabled'])) {
+                        $candidates[] = ['link_id' => $linkId];
+                    }
+                }
+            } else {
+                $candidates = $this->repositories->dueCandidates($startedAt, $limit);
+            }
             foreach ($candidates as $candidate) {
                 if (microtime(true) >= $deadline) {
                     break;
@@ -93,6 +102,7 @@ final class Worker
                 }
                 $counts['claimed']++;
 
+                $link = null;
                 try {
                     $link = $this->repositories->claimedLink($linkId, $token);
                     if (!$link || 'published' !== $link['visibility'] || empty($link['check_enabled'])) {
@@ -105,7 +115,7 @@ final class Worker
                     $counts['failed']++;
                     $errors[] = $this->summarize($error->getMessage());
                     $failures = isset($link) ? (int) $link['availability_consecutive_failures'] : 0;
-                    $backoff = min(21600, 300 * (2 ** min(6, $failures)));
+                    $backoff = $this->failureBackoff($failures + 1);
                     $this->repositories->releaseLease($linkId, $token, time() + $backoff);
                 }
 
@@ -137,16 +147,23 @@ final class Worker
                 'error_summary' => $errors ? implode('; ', array_slice(array_unique($errors), 0, 3)) : null,
             ]);
         } catch (\Throwable $error) {
+            $counts['failed'] = max(1, $counts['failed']);
             $errors[] = $this->summarize($error->getMessage());
-            $this->repositories->updateRun($runId, [
-                'status' => 'failed',
-                'heartbeat_at' => time(),
-                'finished_at' => time(),
-                'claimed_count' => $counts['claimed'],
-                'completed_count' => $counts['completed'],
-                'failed_count' => max(1, $counts['failed']),
-                'error_summary' => implode('; ', array_slice(array_unique($errors), 0, 3)),
-            ]);
+            if ($runCreated) {
+                try {
+                    $this->repositories->updateRun($runId, [
+                        'status' => 'failed',
+                        'heartbeat_at' => time(),
+                        'finished_at' => time(),
+                        'claimed_count' => $counts['claimed'],
+                        'completed_count' => $counts['completed'],
+                        'failed_count' => $counts['failed'],
+                        'error_summary' => implode('; ', array_slice(array_unique($errors), 0, 3)),
+                    ]);
+                } catch (\Throwable $updateError) {
+                    $errors[] = $this->summarize($updateError->getMessage());
+                }
+            }
         }
 
         if (microtime(true) < $deadline) {
@@ -198,6 +215,7 @@ final class Worker
         $dnsDue = $httpDue || $tlsDue || (int) $link['dns_next_check_at'] <= $now;
         $domainDue = (int) $link['domain_next_check_at'] <= $now;
         $prepared = null;
+        $requestPerformed = false;
 
         if ($dnsDue) {
             $this->assertDeadline($deadline);
@@ -233,9 +251,8 @@ final class Worker
                 65536,
                 $prepared
             );
-            if ($httpDue) {
-                $components['http'] = $this->httpComponent($response);
-            }
+            $requestPerformed = true;
+            $components['http'] = $this->httpComponent($response);
             $components['tls'] = $response['tls'];
             if (!$response['ok'] && 0 === strpos((string) $response['reason_code'], 'tls_')) {
                 $components['tls']['reason_code'] = $response['reason_code'];
@@ -249,9 +266,6 @@ final class Worker
                 'duration_ms' => 0,
                 'final_url' => null,
             ];
-            $components['tls'] = 'https' === parse_url((string) $link['normalized_url'], PHP_URL_SCHEME)
-                ? ['state' => 'unknown']
-                : ['state' => 'not_applicable'];
         }
 
         if ($domainDue) {
@@ -266,10 +280,18 @@ final class Worker
         }
 
         $aggregate = $this->aggregator->aggregate($link, $components, $settings, $now);
-        $dnsNext = $dnsDue ? $now + $this->jitter((int) $settings['http_interval']) : (int) $link['dns_next_check_at'];
-        $httpNext = $httpDue ? $now + $this->jitter((int) $settings['http_interval']) : (int) $link['http_next_check_at'];
-        $tlsNext = ($httpDue || $tlsDue)
-            ? $now + $this->jitter((int) $settings['tls_interval'])
+        $mainFailed = empty($aggregate['main_success']);
+        $retryAt = $now + $this->failureBackoff((int) $aggregate['availability_consecutive_failures']);
+        $dnsNext = $dnsDue
+            ? ($mainFailed ? $retryAt : $now + $this->jitter((int) $settings['http_interval']))
+            : (int) $link['dns_next_check_at'];
+        $httpScheduled = $requestPerformed || ($httpDue && null === $prepared);
+        $httpNext = $httpScheduled
+            ? ($mainFailed ? $retryAt : $now + $this->jitter((int) $settings['http_interval']))
+            : (int) $link['http_next_check_at'];
+        $tlsScheduled = $requestPerformed || ($tlsDue && null === $prepared);
+        $tlsNext = $tlsScheduled
+            ? ($mainFailed ? $retryAt : $now + $this->jitter((int) $settings['tls_interval']))
             : (int) $link['tls_next_check_at'];
         $domainNext = $domainDue
             ? $now + $this->jitter((int) $settings['domain_interval'])
@@ -293,8 +315,8 @@ final class Worker
             'availability_consecutive_failures' => $aggregate['availability_consecutive_failures'],
             'checked_at' => $now,
             'dns_checked_at' => $dnsDue ? $now : $link['dns_checked_at'],
-            'http_checked_at' => $httpDue ? $now : $link['http_checked_at'],
-            'tls_checked_at' => ($httpDue || $tlsDue) ? $now : $link['tls_checked_at'],
+            'http_checked_at' => $requestPerformed ? $now : $link['http_checked_at'],
+            'tls_checked_at' => $requestPerformed ? $now : $link['tls_checked_at'],
             'domain_checked_at' => $domainDue ? $now : $link['domain_checked_at'],
             'dns_next_check_at' => $dnsNext,
             'http_next_check_at' => $httpNext,
@@ -404,9 +426,14 @@ final class Worker
         return max(60, $seconds + random_int(-$variance, $variance));
     }
 
+    private function failureBackoff(int $failures): int
+    {
+        return min(21600, 300 * (2 ** min(6, max(0, $failures - 1))));
+    }
+
     private function summarize(string $message): string
     {
         $message = preg_replace('/[\x00-\x1F\x7F]+/', ' ', $message);
-        return substr(trim((string) $message), 0, 300);
+        return Text::truncateUtf8(trim((string) $message), 300);
     }
 }

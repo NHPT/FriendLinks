@@ -3,6 +3,7 @@
 namespace TypechoPlugin\FriendLinks\Presentation;
 
 use TypechoPlugin\FriendLinks\Application\Settings;
+use TypechoPlugin\FriendLinks\Domain\Text;
 
 final class Renderer
 {
@@ -83,7 +84,7 @@ final class Renderer
                 . '" alt="' . $this->escape($name . ' Logo')
                 . '" loading="lazy" referrerpolicy="no-referrer"></span>';
         } else {
-            $initial = function_exists('mb_substr') ? mb_substr($name, 0, 1, 'UTF-8') : substr($name, 0, 1);
+            $initial = Text::firstCharacter($name);
             $html .= '<span class="flm-logo flm-logo-placeholder" aria-hidden="true">'
                 . $this->escape(strtoupper($initial)) . '</span>';
         }

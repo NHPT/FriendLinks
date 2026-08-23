@@ -7,6 +7,7 @@ use TypechoPlugin\FriendLinks\Domain\IpAddress;
 use TypechoPlugin\FriendLinks\Domain\NotificationTemplate;
 use TypechoPlugin\FriendLinks\Domain\PublicSuffixList;
 use TypechoPlugin\FriendLinks\Domain\StatusAggregator;
+use TypechoPlugin\FriendLinks\Domain\Text;
 use TypechoPlugin\FriendLinks\Domain\UrlNormalizer;
 use TypechoPlugin\FriendLinks\Infrastructure\DingTalkSigner;
 use TypechoPlugin\FriendLinks\Infrastructure\SafeHttpClient;
@@ -103,6 +104,18 @@ $tlsFailure = $healthyComponents;
 $tlsFailure['tls'] = ['state' => 'hostname_mismatch'];
 $result = $aggregator->aggregate(['availability_consecutive_failures' => 0], $tlsFailure, $settings, time());
 check('down' === $result['overall_state'] && 'tls_hostname_mismatch' === $result['reason_code'], 'confirmed TLS failure is immediately down');
+$blockedAndExpired = $tlsFailure;
+$blockedAndExpired['dns'] = ['state' => 'blocked', 'reason_code' => 'dns_blocked_target'];
+$result = $aggregator->aggregate(
+    ['availability_consecutive_failures' => 0],
+    $blockedAndExpired,
+    $settings,
+    time()
+);
+check(
+    'down' === $result['overall_state'] && 'dns_blocked_target' === $result['reason_code'],
+    'DNS and SSRF failures take reason priority over simultaneous TLS failures'
+);
 
 $domainWarning = $healthyComponents;
 $domainWarning['domain'] = ['state' => 'past_expiration'];
@@ -113,6 +126,17 @@ $restricted = $healthyComponents;
 $restricted['http'] = ['state' => 'restricted'];
 $result = $aggregator->aggregate([], $restricted, $settings, time());
 check('degraded' === $result['overall_state'] && 0 === $result['availability_consecutive_failures'], '401/403 does not increase failures');
+$timeout = $healthyComponents;
+$timeout['http'] = ['state' => 'network_error', 'reason_code' => 'http_timeout'];
+$result = $aggregator->aggregate([], $timeout, $settings, time());
+check('http_timeout' === $result['reason_code'], 'aggregator preserves the precise HTTP network failure reason');
+$redirectBlocked = $healthyComponents;
+$redirectBlocked['http'] = ['state' => 'network_error', 'reason_code' => 'dns_blocked_target'];
+$result = $aggregator->aggregate([], $redirectBlocked, $settings, time());
+check(
+    'dns_blocked_target' === $result['reason_code'],
+    'aggregator preserves SSRF policy failures discovered during redirects'
+);
 
 $signer = new WorkerSigner();
 $signature = $signer->sign('secret', 'POST', '/friendlinks/worker', 1700000000, 'nonce_1234567890', '{}');
@@ -155,6 +179,11 @@ check(
 check(
     'missing' === AssetVersion::forFile(__DIR__ . '/missing-asset.css'),
     'missing asset version does not emit a filesystem warning'
+);
+check('友' === Text::firstCharacter('友链'), 'UTF-8 first character works without byte slicing');
+check(
+    '友链' === Text::truncateUtf8("友\xFF链", 20),
+    'UTF-8 truncation removes invalid bytes without optional extensions'
 );
 check(
     !is_file(dirname(__DIR__) . '/vendor/phpmailer/phpmailer/get_oauth_token.php'),
@@ -223,6 +252,29 @@ check(
         'reason_code' => 'http_unreachable',
     ], $notificationSettings, str_repeat('b', 32), 1700000100),
     'unchanged status does not create duplicate notification events'
+);
+$longNotificationRows = $planner->plan([
+    'id' => 43,
+    'name' => str_repeat('站', 500),
+    'url' => 'https://example.com/',
+    'overall_state' => 'healthy',
+    'reason_code' => null,
+], [
+    'overall_state' => 'down',
+    'reason_code' => 'http_timeout',
+    'http_code' => null,
+    'response_time_ms' => null,
+    'checked_at' => 1700000200,
+], array_merge($notificationSettings, [
+    'notification_subject_template' => '{{link_name}}{{link_name}}',
+    'notification_message_template' => str_repeat('{{link_name}}', 20),
+]), str_repeat('c', 32), 1700000200);
+check(
+    strlen($longNotificationRows[0]['subject']) <= NotificationTemplate::SUBJECT_MAX_BYTES
+        && 1 === preg_match('//u', $longNotificationRows[0]['subject'])
+        && strlen($longNotificationRows[0]['message']) <= NotificationTemplate::MESSAGE_MAX_BYTES
+        && strlen($longNotificationRows[0]['payload_json']) <= NotificationTemplate::PAYLOAD_MAX_BYTES,
+    'rendered notification values stay within database and webhook byte limits'
 );
 
 fwrite(STDOUT, "OK: {$tests} assertions\n");

@@ -12,6 +12,8 @@ use Widget\Plugins\Edit;
 
 final class Settings
 {
+    private const WORKER_SECRET_OPTION = 'friendlinks_worker_secret';
+
     public static function defaults(): array
     {
         return [
@@ -29,7 +31,8 @@ final class Settings
             'show_expiration_warning' => 1,
             'rel_noreferrer' => 1,
             'rel_nofollow' => 0,
-            'worker_secret' => bin2hex(random_bytes(32)),
+            'http_worker_enabled' => 0,
+            'worker_secret' => '',
             'debug_until' => 0,
             'notifications_enabled' => 0,
             'notify_on_down' => 1,
@@ -59,6 +62,7 @@ final class Settings
     public static function all(): array
     {
         $defaults = self::defaults();
+        $legacyWorkerSecret = '';
         try {
             $database = new Database();
             $db = $database->native();
@@ -73,6 +77,7 @@ final class Settings
                         $defaults[$key] = $stored[$key];
                     }
                 }
+                $legacyWorkerSecret = (string) ($stored['worker_secret'] ?? '');
             }
         } catch (\Throwable $ignored) {
             try {
@@ -82,10 +87,15 @@ final class Settings
                         $defaults[$key] = $stored->{$key};
                     }
                 }
+                $legacyWorkerSecret = isset($stored->worker_secret) ? (string) $stored->worker_secret : '';
             } catch (\Throwable $ignoredAgain) {
             }
         }
 
+        $defaults['worker_secret'] = self::loadOrCreateWorkerSecret($legacyWorkerSecret);
+        if ('' !== $legacyWorkerSecret) {
+            self::save($defaults);
+        }
         return $defaults;
     }
 
@@ -121,7 +131,13 @@ final class Settings
             $current[$key] = (int) $value;
         }
 
-        foreach (['restricted_is_healthy', 'show_expiration_warning', 'rel_noreferrer', 'rel_nofollow'] as $key) {
+        foreach ([
+            'restricted_is_healthy',
+            'show_expiration_warning',
+            'rel_noreferrer',
+            'rel_nofollow',
+            'http_worker_enabled',
+        ] as $key) {
             $current[$key] = empty($input[$key]) ? 0 : 1;
         }
 
@@ -209,6 +225,21 @@ final class Settings
             throw new \InvalidArgumentException('SMTP 加密方式无效。');
         }
         $current['smtp_encryption'] = $encryption;
+        $hasUsername = '' !== (string) $current['smtp_username'];
+        $hasPassword = '' !== (string) $current['smtp_password'];
+        if ($hasUsername !== $hasPassword) {
+            throw new \InvalidArgumentException('SMTP 用户名和密码必须同时填写。');
+        }
+        if ('none' === $encryption && ($hasUsername || $hasPassword)) {
+            throw new \InvalidArgumentException('无加密 SMTP 仅允许不带认证的本地中继。');
+        }
+        if (
+            'none' === $encryption
+            && '' !== (string) $current['smtp_host']
+            && !self::isLoopbackHost((string) $current['smtp_host'])
+        ) {
+            throw new \InvalidArgumentException('无加密 SMTP 主机必须是本机回环地址。');
+        }
         $current['notification_subject_template'] = NotificationTemplate::validate(
             (string) ($input['notification_subject_template'] ?? ''),
             240,
@@ -261,15 +292,26 @@ final class Settings
 
     public static function save(array $settings): void
     {
+        if (isset($settings['worker_secret']) && preg_match('/^[a-f0-9]{64}$/i', (string) $settings['worker_secret'])) {
+            self::persistWorkerSecret((string) $settings['worker_secret']);
+        }
+        $settings['worker_secret'] = '';
         Edit::configPlugin('FriendLinks', $settings);
     }
 
-    public static function rotateWorkerSecret(): string
+    public static function initialize(array $settings): void
     {
-        $settings = self::all();
-        $settings['worker_secret'] = bin2hex(random_bytes(32));
+        $settings = array_replace(self::defaults(), $settings);
+        $settings['worker_secret'] = self::loadOrCreateWorkerSecret((string) $settings['worker_secret']);
         self::save($settings);
-        return $settings['worker_secret'];
+    }
+
+    public static function rotateWorkerSecret(string $secret): void
+    {
+        if (!preg_match('/^[a-f0-9]{64}$/i', $secret)) {
+            throw new \InvalidArgumentException('HTTP Worker 密钥必须是 64 位十六进制字符串。');
+        }
+        self::persistWorkerSecret($secret);
     }
 
     public static function sensitiveKeys(): array
@@ -305,6 +347,86 @@ final class Settings
         if (!empty($page['template'])) {
             throw new \InvalidArgumentException('承载页必须使用普通页面模板，不能使用自定义模板。');
         }
+    }
+
+    private static function loadOrCreateWorkerSecret(string $legacySecret = ''): string
+    {
+        $database = new Database();
+        $db = $database->native();
+        $row = self::workerSecretRow($database);
+        if ($row && preg_match('/^[a-f0-9]{64}$/i', (string) $row['value'])) {
+            return strtolower((string) $row['value']);
+        }
+
+        $secret = preg_match('/^[a-f0-9]{64}$/i', $legacySecret)
+            ? strtolower($legacySecret)
+            : bin2hex(random_bytes(32));
+        if ($row) {
+            $db->query($db->update('table.options')->rows(['value' => $secret])
+                ->where('name = ?', self::WORKER_SECRET_OPTION)
+                ->where('user = ?', 0));
+            $stored = self::workerSecretRow($database);
+            if ($stored && preg_match('/^[a-f0-9]{64}$/i', (string) $stored['value'])) {
+                return strtolower((string) $stored['value']);
+            }
+        }
+
+        try {
+            $db->query($db->insert('table.options')->rows([
+                'name' => self::WORKER_SECRET_OPTION,
+                'user' => 0,
+                'value' => $secret,
+            ]));
+        } catch (\Throwable $error) {
+            $winner = self::workerSecretRow($database);
+            if ($winner && preg_match('/^[a-f0-9]{64}$/i', (string) $winner['value'])) {
+                return strtolower((string) $winner['value']);
+            }
+            throw $error;
+        }
+        return $secret;
+    }
+
+    private static function persistWorkerSecret(string $secret): void
+    {
+        $secret = strtolower($secret);
+        $database = new Database();
+        $db = $database->native();
+        $updated = $db->query($db->update('table.options')->rows(['value' => $secret])
+            ->where('name = ?', self::WORKER_SECRET_OPTION)
+            ->where('user = ?', 0));
+        if (1 === $updated) {
+            return;
+        }
+        $row = self::workerSecretRow($database);
+        if ($row) {
+            if (!hash_equals($secret, strtolower((string) $row['value']))) {
+                $db->query($db->update('table.options')->rows(['value' => $secret])
+                    ->where('name = ?', self::WORKER_SECRET_OPTION)
+                    ->where('user = ?', 0));
+            }
+            return;
+        }
+        try {
+            $db->query($db->insert('table.options')->rows([
+                'name' => self::WORKER_SECRET_OPTION,
+                'user' => 0,
+                'value' => $secret,
+            ]));
+        } catch (\Throwable $error) {
+            $db->query($db->update('table.options')->rows(['value' => $secret])
+                ->where('name = ?', self::WORKER_SECRET_OPTION)
+                ->where('user = ?', 0));
+        }
+    }
+
+    private static function workerSecretRow(Database $database): ?array
+    {
+        $db = $database->native();
+        return $database->fetchRowWrite($db->select('value')->from('table.options')
+            ->where('name = ?', self::WORKER_SECRET_OPTION)
+            ->where('user = ?', 0)
+            ->limit(1));
     }
 
     private static function secretValue(
@@ -382,5 +504,15 @@ final class Settings
         $host = trim($host, '[]');
         return false !== filter_var($host, FILTER_VALIDATE_IP)
             || false !== filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME);
+    }
+
+    private static function isLoopbackHost(string $host): bool
+    {
+        $host = strtolower(rtrim(trim($host, '[]'), '.'));
+        if ('localhost' === $host || '::1' === $host) {
+            return true;
+        }
+        return 1 === preg_match('/^127(?:\.\d{1,3}){3}$/D', $host)
+            && false !== filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
     }
 }

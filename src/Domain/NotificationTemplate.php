@@ -4,6 +4,10 @@ namespace TypechoPlugin\FriendLinks\Domain;
 
 final class NotificationTemplate
 {
+    public const SUBJECT_MAX_BYTES = 240;
+    public const MESSAGE_MAX_BYTES = 12288;
+    public const PAYLOAD_MAX_BYTES = 65536;
+
     public const DEFAULT_SUBJECT = '[FriendLinks] {{link_name}} {{event_name}}';
 
     public const DEFAULT_MESSAGE = "站点：{{link_name}}\n"
@@ -59,7 +63,12 @@ final class NotificationTemplate
         return $template;
     }
 
-    public static function render(string $template, array $context, bool $singleLine = false): string
+    public static function render(
+        string $template,
+        array $context,
+        bool $singleLine = false,
+        int $maxBytes = 0
+    ): string
     {
         $values = [];
         foreach (self::PLACEHOLDERS as $placeholder) {
@@ -75,7 +84,8 @@ final class NotificationTemplate
         if ($singleLine) {
             $rendered = preg_replace('/\s+/u', ' ', $rendered);
         }
-        return trim((string) $rendered);
+        $rendered = trim((string) $rendered);
+        return $maxBytes > 0 ? Text::truncateUtf8($rendered, $maxBytes) : $rendered;
     }
 
     public static function placeholders(): array
