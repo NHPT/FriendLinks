@@ -1,0 +1,74 @@
+name: Security Audit
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: '23 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: PHP ${{ matrix.php-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version:
+          - '7.4'
+          - '8.2'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          coverage: none
+          tools: composer:v2
+          extensions: curl, intl, mbstring, openssl
+
+      - name: Validate Composer metadata
+        run: composer validate --strict
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Audit Composer dependencies
+        run: composer audit --format=plain
+
+      - name: Run domain tests
+        run: php tests/run.php
+
+      - name: Check PHP syntax
+        run: |
+          find . -path ./vendor -prune -o -name '*.php' -type f -print0 \
+            | xargs -0 -n1 php -l
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check JavaScript syntax
+        run: node --check assets/admin.js
+
+      - name: Scan for local debug and secret markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RInE '(bytedance|blog\.hackall|bgsnadmin|/Users/|DEBUG_SERVER_URL|trae-debug|\.dbg|BEGIN (RSA|OPENSSH) PRIVATE KEY|ghp_[A-Za-z0-9_]{20,}|xox[baprs]-)' \
+            --exclude-dir=.git \
+            --exclude-dir=vendor \
+            --exclude=composer.lock \
+            .; then
+            echo 'Sensitive marker scan failed.'
+            exit 1
+          fi

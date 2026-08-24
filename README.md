@@ -119,6 +119,30 @@ CLI Worker 页面同时显示自动任务是否安装以及最近一次 CLI 运�
 
 一次自动任务同时处理到期检测和通知 Outbox，不需要额外的通知 Cron。CLI 入口仍会检查插件启用状态，避免已进入执行队列的旧进程在停用后继续工作。
 
+### 宝塔环境
+
+宝塔常见默认配置会在站点 PHP 版本中禁用 `proc_open`。FriendLinks 不使用 `exec`、`system` 或 `shell_exec`，但自动安装 Cron 需要 `proc_open` 调用系统 `crontab`。
+
+先检查当前站点 PHP：
+
+```bash
+/www/server/php/82/bin/php -i | grep disable_functions
+```
+
+如果输出包含 `proc_open`，有两种处理方式：
+
+1. 在宝塔面板进入“软件商店 → PHP 8.2 → 设置 → 禁用函数”，删除 `proc_open`，保存后重启 PHP-FPM。随后停用再启用 FriendLinks，让插件重新探测并自动安装 Cron。
+2. 保持 `proc_open` 禁用，在宝塔“计划任务”中手工添加 Shell 任务，使用下方“手工 CLI Cron”命令。这个方案安全边界更清楚，推荐给不希望 PHP 修改系统 crontab 的环境。
+
+启用后可以用以下命令验证：
+
+```bash
+sudo -u www /www/server/php/82/bin/php /path/to/typecho/usr/plugins/FriendLinks/bin/console.php self-test
+sudo -u www crontab -l
+```
+
+`self-test` 应只输出 `FriendLinks CLI ready`。如果 `crontab -l` 中看到 `BEGIN FriendLinks` 管理块，说明自动安装已经成功。
+
 ### 手工 CLI Cron
 
 宝塔、虚拟主机或禁用 `proc_open` 的环境无法由插件自动修改系统任务时，可在主机面板中创建 Shell 任务。PHP CLI 和插件路径必须替换为服务器上的绝对路径：
@@ -500,6 +524,17 @@ TYPECHO_TEST_ROOT=/path/to/typecho php tests/typecho-integration.php
 - Composer 依赖漏洞扫描
 - 桌面端与移动端浏览器布局、Logo 裁切和悬停状态
 
+GitHub Actions 会在 `main`、Pull Request、每周计划任务和手工触发时执行安全审计工作流：
+
+- `composer validate --strict`
+- `composer audit`
+- PHP 语法检查
+- `tests/run.php` 领域测试
+- `assets/admin.js` 语法检查
+- 本机路径、调试标记和常见密钥格式扫描
+
+发布 `v*` 标签会触发 Release 工作流，自动打包包含 `vendor/` 的 `FriendLinks-vX.Y.Z.zip` 并创建 GitHub Release 页面。已经存在的标签也可以在 GitHub Actions 页面手工执行 `Release` 工作流并输入 tag 补建 Release。
+
 ## 常见问题
 
 ### 启用后前台没有列表
@@ -510,7 +545,7 @@ TYPECHO_TEST_ROOT=/path/to/typecho php tests/typecho-integration.php
 
 请检查服务器是否为 Linux、PHP 是否允许 `proc_open`、Web 运行用户是否拥有用户 crontab 权限，以及 PHP CLI 能否加载当前站点的数据库扩展。单纯缺少这些能力不会阻止插件启用，但需要按“手工 CLI Cron”配置，或启用签名 HTTP Worker。
 
-仅禁用 PHP `exec` 不影响 FriendLinks，因为插件不调用 `exec`；禁用 `proc_open` 才会阻止自动安装。宝塔环境只要 PHP Web 用户可读写自己的用户 crontab 即可使用，不要求插件接管宝塔计划任务。多数虚拟主机同时禁止 `proc_open`、系统命令或用户 crontab，因此无法由 PHP 插件创建真实的后台定时任务。
+仅禁用 PHP `exec` 不影响 FriendLinks，因为插件不调用 `exec`；禁用 `proc_open` 才会阻止自动安装。宝塔环境可删除 PHP 禁用函数中的 `proc_open` 后重启 PHP-FPM，也可以保持禁用并使用宝塔计划任务手工配置。多数虚拟主机同时禁止 `proc_open`、系统命令或用户 crontab，因此无法由 PHP 插件创建真实的后台定时任务。
 
 ### 后台点击“立即检测”后状态没有变化
 

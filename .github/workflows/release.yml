@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to publish, for example v1.0.0'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve tag
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+(\.[0-9]+){2}([.-][0-9A-Za-z.-]+)?$'; then
+            echo "Invalid release tag: $tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2
+          extensions: curl, intl, mbstring, openssl
+
+      - name: Validate release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          composer validate --strict
+          grep -q "@version ${{ steps.release.outputs.version }}" Plugin.php
+
+      - name: Install production dependencies
+        run: composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader
+
+      - name: Package plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist/FriendLinks
+          rsync -a ./ dist/FriendLinks/ \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.dbg' \
+            --exclude='dist' \
+            --exclude='tests' \
+            --exclude='debug-*' \
+            --exclude='.DS_Store'
+          test -f dist/FriendLinks/Plugin.php
+          test -f dist/FriendLinks/vendor/autoload.php
+          (cd dist && zip -r "FriendLinks-${{ steps.release.outputs.tag }}.zip" FriendLinks)
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: FriendLinks ${{ steps.release.outputs.tag }}
+          generate_release_notes: true
+          files: dist/FriendLinks-${{ steps.release.outputs.tag }}.zip
