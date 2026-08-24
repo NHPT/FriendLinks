@@ -127,6 +127,9 @@
       Array.prototype.forEach.call(panels, function (panel) {
         panel.hidden = panel.getAttribute('data-flm-notification-panel') !== id;
       });
+      Array.prototype.forEach.call(form.querySelectorAll('[data-flm-notification-queue]'), function (button) {
+        button.hidden = id !== 'policy';
+      });
       Array.prototype.forEach.call(form.querySelectorAll('[data-flm-notification-test]'), function (button) {
         var channel = button.getAttribute('data-flm-notification-test');
         button.hidden = ['webhook', 'dingtalk', 'email'].indexOf(id) === -1 || channel !== id;

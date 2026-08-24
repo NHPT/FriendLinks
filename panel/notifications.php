@@ -145,7 +145,7 @@ $placeholders = array_map(static function ($name) {
 
           <div class="flm-form-actions flm-notification-actions">
             <button class="btn primary" type="submit">保存通知设置</button>
-            <button class="btn flm-notification-action flm-notification-queue" type="submit" formaction="<?php echo flm_e(flm_action_url('dispatch-notifications')); ?>" formnovalidate<?php echo empty($settings['notifications_enabled']) ? ' disabled' : ''; ?>>立即处理队列</button>
+            <button class="btn flm-notification-action flm-notification-queue" type="submit" formaction="<?php echo flm_e(flm_action_url('dispatch-notifications')); ?>" formnovalidate data-flm-notification-queue<?php echo empty($settings['notifications_enabled']) ? ' disabled' : ''; ?>>立即处理队列</button>
             <button class="btn flm-notification-action flm-notification-test" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'webhook'])); ?>" formnovalidate data-flm-notification-test="webhook" hidden>发送测试消息</button>
             <button class="btn flm-notification-action flm-notification-test" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'dingtalk'])); ?>" formnovalidate data-flm-notification-test="dingtalk" hidden>发送测试消息</button>
             <button class="btn flm-notification-action flm-notification-test" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'email'])); ?>" formnovalidate data-flm-notification-test="email" hidden>发送测试消息</button>
