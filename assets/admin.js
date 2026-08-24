@@ -148,6 +148,58 @@
     activate(requested, false);
   }
 
+  function initializeNotificationTestButtons(form) {
+    var buttons = form.querySelectorAll('[data-flm-notification-test]');
+    if (!buttons.length) {
+      return;
+    }
+
+    var field = function (name) {
+      return form.querySelector('[name="' + name + '"]');
+    };
+    var value = function (name) {
+      var input = field(name);
+      return input ? input.value.replace(/^\s+|\s+$/g, '') : '';
+    };
+    var checked = function (name) {
+      var input = field(name);
+      return !!(input && input.checked);
+    };
+    var configuredValue = function (name, clearName) {
+      var input = field(name);
+      if (!input) {
+        return false;
+      }
+      return value(name) !== '' || (input.getAttribute('data-flm-configured') === '1' && !checked(clearName));
+    };
+    var enabled = function (channel) {
+      if (channel === 'webhook') {
+        return configuredValue('webhook_url', 'clear_webhook_url');
+      }
+      if (channel === 'dingtalk') {
+        return configuredValue('dingtalk_webhook_url', 'clear_dingtalk_webhook_url');
+      }
+      if (channel === 'email') {
+        if (!value('smtp_host') || !value('smtp_port') || !value('smtp_from_address') || !value('email_recipients')) {
+          return false;
+        }
+        return !value('smtp_username') || configuredValue('smtp_password', 'clear_smtp_password');
+      }
+      return false;
+    };
+    var refresh = function () {
+      Array.prototype.forEach.call(buttons, function (button) {
+        var active = enabled(button.getAttribute('data-flm-notification-test'));
+        button.disabled = !active;
+        button.setAttribute('aria-disabled', active ? 'false' : 'true');
+      });
+    };
+
+    form.addEventListener('input', refresh);
+    form.addEventListener('change', refresh);
+    refresh();
+  }
+
   function initializeSettingsTabs(form) {
     var buttons = form.querySelectorAll('[data-flm-settings-tab]');
     var panels = form.querySelectorAll('[data-flm-settings-panel]');
@@ -409,6 +461,10 @@
     Array.prototype.forEach.call(
       document.querySelectorAll('[data-flm-notification-settings]'),
       initializeNotificationTabs
+    );
+    Array.prototype.forEach.call(
+      document.querySelectorAll('[data-flm-notification-settings]'),
+      initializeNotificationTestButtons
     );
     Array.prototype.forEach.call(document.querySelectorAll('[data-flm-settings]'), initializeSettingsTabs);
     Array.prototype.forEach.call(document.querySelectorAll('[data-flm-confirm-dialog]'), initializeConfirmDialog);

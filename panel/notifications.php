@@ -63,14 +63,14 @@ $placeholders = array_map(static function ($name) {
             <label for="flm-notification-cooldown">同类通知冷却时间（秒）</label>
             <input id="flm-notification-cooldown" type="number" name="notification_cooldown" min="300" max="604800" value="<?php echo (int) $settings['notification_cooldown']; ?>">
             <p class="flm-help">同一友链、同一事件和同一渠道在冷却时间内只创建一条通知，默认 3600 秒。</p>
-            <button class="btn" type="submit" formaction="<?php echo flm_e(flm_action_url('dispatch-notifications')); ?>" formnovalidate<?php echo empty($settings['notifications_enabled']) ? ' disabled' : ''; ?>>立即处理队列</button>
+            <button class="btn flm-notification-action flm-notification-queue" type="submit" formaction="<?php echo flm_e(flm_action_url('dispatch-notifications')); ?>" formnovalidate<?php echo empty($settings['notifications_enabled']) ? ' disabled' : ''; ?>>立即处理队列</button>
           </section>
 
           <section class="flm-notification-panel" data-flm-notification-panel="webhook" hidden>
             <div class="flm-section-head"><div><h3>通用 Webhook</h3><p>向 HTTPS 接口投递签名 JSON。</p></div></div>
             <p><label class="flm-check"><input type="checkbox" name="webhook_enabled" value="1"<?php echo $settings['webhook_enabled'] ? ' checked' : ''; ?>> 启用通用 Webhook</label></p>
             <label for="flm-webhook-url">HTTPS 地址</label>
-            <input id="flm-webhook-url" type="password" name="webhook_url" value="" autocomplete="new-password" placeholder="<?php echo $settings['webhook_url'] ? '已配置，留空保持不变' : 'https://hooks.example.com/friendlinks'; ?>">
+            <input id="flm-webhook-url" type="password" name="webhook_url" value="" autocomplete="new-password" data-flm-configured="<?php echo $settings['webhook_url'] ? '1' : '0'; ?>" placeholder="<?php echo $settings['webhook_url'] ? '已配置，留空保持不变' : 'https://hooks.example.com/friendlinks'; ?>">
             <p class="flm-help">请求体为 JSON；禁止私网、回环和非 HTTPS 目标，不跟随重定向。</p>
             <label for="flm-webhook-secret">HMAC-SHA256 签名密钥（可选）</label>
             <input id="flm-webhook-secret" type="password" name="webhook_secret" value="" autocomplete="new-password" placeholder="<?php echo $settings['webhook_secret'] ? '已配置，留空保持不变' : '留空则不发送签名头'; ?>">
@@ -78,21 +78,21 @@ $placeholders = array_map(static function ($name) {
               <label class="flm-check"><input type="checkbox" name="clear_webhook_url" value="1"> 清除已保存的地址</label>
               <label class="flm-check"><input type="checkbox" name="clear_webhook_secret" value="1"> 清除已保存的密钥</label>
             </div>
-            <button class="btn" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'webhook'])); ?>" formnovalidate<?php echo empty($settings['webhook_enabled']) ? ' disabled' : ''; ?>>测试已保存配置</button>
+            <button class="btn flm-notification-action flm-notification-test" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'webhook'])); ?>" formnovalidate data-flm-notification-test="webhook">发送测试消息</button>
           </section>
 
           <section class="flm-notification-panel" data-flm-notification-panel="dingtalk" hidden>
             <div class="flm-section-head"><div><h3>钉钉机器人</h3><p>支持钉钉自定义机器人的加签安全模式。</p></div></div>
             <p><label class="flm-check"><input type="checkbox" name="dingtalk_enabled" value="1"<?php echo $settings['dingtalk_enabled'] ? ' checked' : ''; ?>> 启用钉钉机器人</label></p>
             <label for="flm-dingtalk-url">机器人 Webhook 地址</label>
-            <input id="flm-dingtalk-url" type="password" name="dingtalk_webhook_url" value="" autocomplete="new-password" placeholder="<?php echo $settings['dingtalk_webhook_url'] ? '已配置，留空保持不变' : 'https://oapi.dingtalk.com/robot/send?access_token=...'; ?>">
+            <input id="flm-dingtalk-url" type="password" name="dingtalk_webhook_url" value="" autocomplete="new-password" data-flm-configured="<?php echo $settings['dingtalk_webhook_url'] ? '1' : '0'; ?>" placeholder="<?php echo $settings['dingtalk_webhook_url'] ? '已配置，留空保持不变' : 'https://oapi.dingtalk.com/robot/send?access_token=...'; ?>">
             <label for="flm-dingtalk-secret">加签密钥（可选）</label>
             <input id="flm-dingtalk-secret" type="password" name="dingtalk_secret" value="" autocomplete="new-password" placeholder="<?php echo $settings['dingtalk_secret'] ? '已配置，留空保持不变' : 'SEC...'; ?>">
             <div class="flm-secret-actions">
               <label class="flm-check"><input type="checkbox" name="clear_dingtalk_webhook_url" value="1"> 清除已保存的地址</label>
               <label class="flm-check"><input type="checkbox" name="clear_dingtalk_secret" value="1"> 清除已保存的密钥</label>
             </div>
-            <button class="btn" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'dingtalk'])); ?>" formnovalidate<?php echo empty($settings['dingtalk_enabled']) ? ' disabled' : ''; ?>>测试已保存配置</button>
+            <button class="btn flm-notification-action flm-notification-test" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'dingtalk'])); ?>" formnovalidate data-flm-notification-test="dingtalk">发送测试消息</button>
           </section>
 
           <section class="flm-notification-panel" data-flm-notification-panel="email" hidden>
@@ -119,7 +119,7 @@ $placeholders = array_map(static function ($name) {
             <label for="flm-smtp-username">SMTP 用户名</label>
             <input id="flm-smtp-username" type="text" name="smtp_username" value="<?php echo flm_e($settings['smtp_username']); ?>" autocomplete="username">
             <label for="flm-smtp-password">SMTP 密码</label>
-            <input id="flm-smtp-password" type="password" name="smtp_password" value="" autocomplete="new-password" placeholder="<?php echo $settings['smtp_password'] ? '已配置，留空保持不变' : 'SMTP 密码或应用专用密码'; ?>">
+            <input id="flm-smtp-password" type="password" name="smtp_password" value="" autocomplete="new-password" data-flm-configured="<?php echo $settings['smtp_password'] ? '1' : '0'; ?>" placeholder="<?php echo $settings['smtp_password'] ? '已配置，留空保持不变' : 'SMTP 密码或应用专用密码'; ?>">
             <p><label class="flm-check"><input type="checkbox" name="clear_smtp_password" value="1"> 清除已保存的 SMTP 密码</label></p>
             <div class="flm-field-grid">
               <div class="flm-field">
@@ -134,7 +134,7 @@ $placeholders = array_map(static function ($name) {
             <label for="flm-email-recipients">收件地址</label>
             <input id="flm-email-recipients" type="text" name="email_recipients" value="<?php echo flm_e($settings['email_recipients']); ?>" placeholder="admin@example.com, ops@example.com">
             <p class="flm-help">最多 20 个地址，使用逗号、分号或空格分隔。填写用户名或密码时必须使用 STARTTLS 或 SMTPS。</p>
-            <button class="btn" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'email'])); ?>" formnovalidate<?php echo empty($settings['email_enabled']) ? ' disabled' : ''; ?>>测试已保存配置</button>
+            <button class="btn flm-notification-action flm-notification-test" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'email'])); ?>" formnovalidate data-flm-notification-test="email">发送测试消息</button>
           </section>
 
           <section class="flm-notification-panel" data-flm-notification-panel="template" hidden>

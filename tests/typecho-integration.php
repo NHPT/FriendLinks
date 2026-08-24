@@ -489,6 +489,8 @@ $linksPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/links.php');
 $categoriesPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/categories.php');
 $healthPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/health.php');
 $settingsPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/settings.php');
+$notificationsPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/notifications.php');
+$frontendStyles = (string) file_get_contents(dirname(__DIR__) . '/assets/frontend.css');
 $adminScript = (string) file_get_contents(dirname(__DIR__) . '/assets/admin.js');
 $adminStyles = (string) file_get_contents(dirname(__DIR__) . '/assets/admin.css');
 $actionSource = (string) file_get_contents(dirname(__DIR__) . '/Action.php');
@@ -511,6 +513,11 @@ $saveSettingsSource = preg_match(
     $actionSource,
     $saveSettingsMatch
 ) ? $saveSettingsMatch[1] : '';
+$testNotificationSource = preg_match(
+    '/private function testNotification\\(\\): void(.*?)private function notificationInputFromRequest\\(\\): array/s',
+    $actionSource,
+    $testNotificationMatch
+) ? $testNotificationMatch[1] : '';
 $check(
     false === strpos($linkEditPanel, '最近状态')
         && false === strpos($linkEditPanel, "json_decode(\$link['details_json']")
@@ -607,6 +614,34 @@ $check(
         && false !== strpos($adminStyles, 'color: var(--flm-admin-bad)')
         && substr_count($settingsPanel, "\$cronDisabled ? ' disabled' : ''") >= 4,
     'unavailable automatic Cron shows a critical fallback notice and disables CLI-only controls'
+);
+$check(
+    false !== strpos($frontendStyles, '.flm-root .flm-list')
+        && false !== strpos($frontendStyles, 'margin: 0 !important')
+        && false !== strpos($frontendStyles, 'padding: 0 !important')
+        && false !== strpos($frontendStyles, '.flm-root .flm-item')
+        && false !== strpos($frontendStyles, 'html.theme-dark .flm-root')
+        && false !== strpos($frontendStyles, '--flm-bg: var(--theme-surface')
+        && false !== strpos($frontendStyles, '--flm-accent: var(--theme-accent')
+        && false !== strpos($frontendStyles, '--flm-accent-soft: var(--theme-accent-soft'),
+    'frontend renderer clears theme list spacing and follows theme color variables'
+);
+$check(
+    false === strpos($notificationsPanel, '测试已保存配置')
+        && false !== strpos($notificationsPanel, '发送测试消息')
+        && false !== strpos($notificationsPanel, 'data-flm-notification-test="webhook"')
+        && false !== strpos($notificationsPanel, 'data-flm-notification-test="dingtalk"')
+        && false !== strpos($notificationsPanel, 'data-flm-notification-test="email"')
+        && false !== strpos($notificationsPanel, 'data-flm-configured=')
+        && false !== strpos($notificationsPanel, 'flm-notification-action')
+        && false !== strpos($adminStyles, '.flm-admin .flm-notification-action')
+        && false !== strpos($adminScript, 'initializeNotificationTestButtons')
+        && false !== strpos($adminScript, "configuredValue('webhook_url'")
+        && false !== strpos($adminScript, "configuredValue('dingtalk_webhook_url'")
+        && false !== strpos($adminScript, "configuredValue('smtp_password'")
+        && false !== strpos($testNotificationSource, 'notificationInputFromRequest')
+        && false !== strpos($testNotificationSource, "\$input[\$channel . '_enabled'] = 1"),
+    'notification test buttons use current form values with clear labels and visible styling'
 );
 $cronStatusPosition = strpos($saveSettingsSource, '$cronStatus = $cron->status();');
 $cronGuardPosition = strpos($saveSettingsSource, "if (!empty(\$cronStatus['available']))");

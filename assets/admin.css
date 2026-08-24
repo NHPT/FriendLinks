@@ -309,6 +309,30 @@
   margin-top: 16px;
 }
 
+.flm-admin .flm-notification-action {
+  background: #467b96;
+  border-color: #3d6d85;
+  color: #fff;
+  min-height: 32px;
+  padding-bottom: 0;
+  padding-top: 0;
+}
+
+.flm-admin .flm-notification-action:hover,
+.flm-admin .flm-notification-action:focus {
+  background: #37677e;
+  border-color: #315d72;
+  color: #fff;
+}
+
+.flm-admin .flm-notification-action:disabled,
+.flm-admin .flm-notification-action[aria-disabled="true"] {
+  background: #eef1f4;
+  border-color: #d9d9d9;
+  color: #8a8f99;
+  cursor: not-allowed;
+}
+
 .flm-admin .flm-settings-form {
   margin-bottom: 40px;
   max-width: none;

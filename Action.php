@@ -295,7 +295,27 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
 
     private function saveNotifications(): void
     {
-        $settings = Settings::sanitizeNotifications([
+        $settings = Settings::sanitizeNotifications($this->notificationInputFromRequest());
+        Settings::save($settings);
+        Notice::alloc()->set('通知设置已保存。', 'success');
+    }
+
+    private function testNotification(): void
+    {
+        $channel = (string) $this->request->get('channel', '');
+        if (!in_array($channel, ['webhook', 'dingtalk', 'email'], true)) {
+            throw new InvalidArgumentException('通知渠道无效。');
+        }
+        $input = $this->notificationInputFromRequest();
+        $input[$channel . '_enabled'] = 1;
+        $settings = Settings::sanitizeNotifications($input);
+        (new NotificationDispatcher())->sendTest($channel, $settings);
+        Notice::alloc()->set('测试通知已发送。', 'success');
+    }
+
+    private function notificationInputFromRequest(): array
+    {
+        return [
             'notifications_enabled' => $this->request->get('notifications_enabled', 0),
             'notify_on_down' => $this->request->get('notify_on_down', 0),
             'notify_on_recovery' => $this->request->get('notify_on_recovery', 0),
@@ -323,19 +343,7 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
             'email_recipients' => $this->request->get('email_recipients', ''),
             'notification_subject_template' => $this->request->get('notification_subject_template', ''),
             'notification_message_template' => $this->request->get('notification_message_template', ''),
-        ]);
-        Settings::save($settings);
-        Notice::alloc()->set('通知设置已保存。', 'success');
-    }
-
-    private function testNotification(): void
-    {
-        $channel = (string) $this->request->get('channel', '');
-        if (!in_array($channel, ['webhook', 'dingtalk', 'email'], true)) {
-            throw new InvalidArgumentException('通知渠道无效。');
-        }
-        (new NotificationDispatcher())->sendTest($channel, Settings::all());
-        Notice::alloc()->set('测试通知已发送。', 'success');
+        ];
     }
 
     private function dispatchNotifications(): void
