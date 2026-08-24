@@ -131,7 +131,7 @@ CLI Worker 页面同时显示自动任务是否安装以及最近一次 CLI 运�
 
 如果输出包含 `proc_open`，有两种处理方式：
 
-1. 在宝塔面板进入“软件商店 → PHP 8.2 → 设置 → 禁用函数”，删除 `proc_open`，保存后重启 PHP-FPM。随后停用再启用 FriendLinks，让插件重新探测并自动安装 Cron。
+1. 在宝塔面板进入“软件商店 → PHP 8.2 → 设置 → 禁用函数”，删除 `proc_open`，保存后重启 PHP-FPM。实测宝塔环境只要站点 PHP 启用 `proc_open`，并且 `www` 用户可执行 `crontab`，FriendLinks 即可自动安装 Cron；随后停用再启用 FriendLinks，让插件重新探测并自动安装。
 2. 保持 `proc_open` 禁用，在宝塔“计划任务”中手工添加 Shell 任务，使用下方“手工 CLI Cron”命令。这个方案安全边界更清楚，推荐给不希望 PHP 修改系统 crontab 的环境。
 
 启用后可以用以下命令验证：
