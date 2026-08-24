@@ -64,11 +64,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -RInE '(bytedance|blog\.hackall|bgsnadmin|/Users/|DEBUG_SERVER_URL|trae-debug|\.dbg|BEGIN (RSA|OPENSSH) PRIVATE KEY|ghp_[A-Za-z0-9_]{20,}|xox[baprs]-)' \
-            --exclude-dir=.git \
-            --exclude-dir=vendor \
-            --exclude=composer.lock \
-            .; then
+
+          debug_artifacts="$(
+            find . \
+              \( -path './.git' -o -path './vendor' -o -path './dist' \) -prune -o \
+              \( -name '.dbg' -o -name 'debug-*' -o -name '*.ndjson' \) -print
+          )"
+          if [ -n "$debug_artifacts" ]; then
+            echo "$debug_artifacts"
+            echo 'Debug artifact scan failed.'
+            exit 1
+          fi
+
+          sensitive_hits="$(
+            find . \
+              \( -path './.git' -o -path './vendor' -o -path './dist' \) -prune -o \
+              -type f \
+              ! -name 'composer.lock' \
+              ! -path './.github/workflows/security-audit.yml' \
+              -print0 \
+              | xargs -0 grep -InE '(bytedance|blog\.hackall|bgsnadmin|/Users/|/www/wwwroot|DEBUG_SERVER_URL|trae-debug|BEGIN (RSA|OPENSSH) PRIVATE KEY|ghp_[A-Za-z0-9_]{20,}|xox[baprs]-)' \
+              || true
+          )"
+          if [ -n "$sensitive_hits" ]; then
+            echo "$sensitive_hits"
             echo 'Sensitive marker scan failed.'
             exit 1
           fi
