@@ -24,6 +24,7 @@ use TypechoPlugin\FriendLinks\Infrastructure\EmailNotificationChannel;
 use TypechoPlugin\FriendLinks\Infrastructure\MigrationManager;
 use TypechoPlugin\FriendLinks\Infrastructure\NotificationChannelInterface;
 use TypechoPlugin\FriendLinks\Infrastructure\Repositories;
+use TypechoPlugin\FriendLinks\Infrastructure\SystemCronManager;
 use TypechoPlugin\FriendLinks\Plugin;
 use TypechoPlugin\FriendLinks\Presentation\Renderer;
 use TypechoPlugin\FriendLinks\Presentation\TemplateCatalog;
@@ -37,6 +38,13 @@ $check = static function ($condition, string $message) use (&$assertions): void 
         throw new RuntimeException('FAILED: ' . $message);
     }
 };
+
+$fakeCronState = sys_get_temp_dir() . '/friendlinks-crontab-' . bin2hex(random_bytes(6));
+@unlink($fakeCronState);
+putenv('FRIENDLINKS_CRONTAB_BINARY=' . __DIR__ . '/fake-crontab.sh');
+putenv('FRIENDLINKS_PHP_CLI=' . PHP_BINARY);
+putenv('FRIENDLINKS_FAKE_CRONTAB_STATE=' . $fakeCronState);
+putenv('FRIENDLINKS_FAKE_CRONTAB_REQUIRE_C_LOCALE=1');
 
 $foreignMenuIndex = Helper::addMenu('友情链接');
 Plugin::activate();
@@ -70,6 +78,216 @@ $check(
     $initializedWorkerSecret === Settings::get('worker_secret'),
     'repeated activation preserves the HTTP Worker secret'
 );
+$cronContents = (string) file_get_contents($fakeCronState);
+$ownCronId = preg_match('/^# BEGIN FriendLinks ([a-f0-9]{32})$/m', $cronContents, $cronMatch)
+    ? $cronMatch[1]
+    : '';
+$check(
+    '' !== $ownCronId
+        && 1 === substr_count($cronContents, '# BEGIN FriendLinks ')
+        && 1 === substr_count($cronContents, '# END FriendLinks ')
+        && false !== strpos($cronContents, 'bin/console.php')
+        && false !== strpos($cronContents, '*/5 * * * *'),
+    'activation installs exactly one managed FriendLinks Cron block'
+);
+$cronSeedRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_cron_id')->where('user = ?', 0)->limit(1));
+$cronPhpRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_cron_php')->where('user = ?', 0)->limit(1));
+$check(
+    $cronSeedRow
+        && 1 === preg_match('/^[a-f0-9]{32}$/', (string) $cronSeedRow['value'])
+        && $ownCronId !== $cronSeedRow['value'],
+    'Cron marker is derived from the persisted random seed and plugin path'
+);
+$check(
+    $cronPhpRow && PHP_BINARY === $cronPhpRow['value'],
+    'activation persists the verified PHP CLI path'
+);
+$check(
+    !empty((new SystemCronManager())->inspect()['installed']),
+    'Cron inspection confirms the automatically installed task'
+);
+$otherCronId = substr(hash('sha256', 'friendlinks-other-instance'), 0, 32);
+$otherCronBlock = "# BEGIN FriendLinks {$otherCronId}\n"
+    . "# Managed automatically by FriendLinks. Do not edit this block.\n"
+    . "*/5 * * * * /bin/true\n"
+    . "# END FriendLinks {$otherCronId}\n";
+file_put_contents(
+    $fakeCronState,
+    "# unrelated task\n0 0 * * * /bin/true\n\n"
+        . $otherCronBlock . "\n" . $cronContents . "\n" . $cronContents
+);
+Plugin::activate();
+$cronContents = (string) file_get_contents($fakeCronState);
+$check(
+    1 === substr_count($cronContents, '# BEGIN FriendLinks ' . $ownCronId)
+        && false !== strpos($cronContents, '# BEGIN FriendLinks ' . $otherCronId)
+        && false !== strpos($cronContents, "# unrelated task\n0 0 * * * /bin/true"),
+    'repeated activation de-duplicates this instance while preserving other Cron tasks'
+);
+file_put_contents($fakeCronState, $cronContents . "\n# task added after FriendLinks\n15 2 * * * /bin/true\n");
+$check(
+    !empty((new SystemCronManager())->inspect()['installed']),
+    'Cron inspection accepts an exact managed block followed by unrelated tasks'
+);
+$cronContents = (string) file_get_contents($fakeCronState);
+$cronOwnerRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_cron_owner')->where('user = ?', 0)->limit(1));
+$db->query($db->update('table.options')->rows([
+    'value' => (string) ((int) $cronOwnerRow['value'] + 1),
+])->where('name = ?', 'friendlinks_cron_owner')->where('user = ?', 0));
+$wrongOwnerRejected = false;
+try {
+    (new SystemCronManager())->remove();
+} catch (RuntimeException $error) {
+    $wrongOwnerRejected = false !== strpos($error->getMessage(), '不是 FriendLinks Cron 的安装用户');
+}
+$db->query($db->update('table.options')->rows([
+    'value' => (string) $cronOwnerRow['value'],
+])->where('name = ?', 'friendlinks_cron_owner')->where('user = ?', 0));
+$check(
+    $wrongOwnerRejected
+        && $cronContents === file_get_contents($fakeCronState),
+    'Cron removal refuses a different PHP system user without changing crontab'
+);
+$unsupportedCronRejected = false;
+try {
+    (new SystemCronManager(null, null, null, null, null, 'Darwin'))->install();
+} catch (RuntimeException $error) {
+    $unsupportedCronRejected = false !== strpos($error->getMessage(), '仅支持 Linux');
+}
+$check($unsupportedCronRejected, 'automatic Cron rejects unsupported operating systems');
+$validCronContents = $cronContents;
+$malformedCronContents = preg_replace(
+    '/^# END FriendLinks [a-f0-9]{32}\n?/m',
+    '',
+    $validCronContents
+);
+file_put_contents($fakeCronState, $malformedCronContents);
+$malformedCronRejected = false;
+try {
+    (new SystemCronManager())->install();
+} catch (RuntimeException $error) {
+    $malformedCronRejected = false !== strpos($error->getMessage(), '缺少结束标记');
+}
+$check(
+    $malformedCronRejected
+        && $malformedCronContents === file_get_contents($fakeCronState),
+    'automatic Cron refuses malformed markers without overwriting the crontab'
+);
+file_put_contents($fakeCronState, $validCronContents);
+$cronContents = $validCronContents;
+$memoryCron = "# preserved cron\n";
+$corruptNextWrite = true;
+$runner = static function (array $command, string $input) use (&$memoryCron, &$corruptNextWrite): array {
+    $argument = $command[1] ?? '';
+    if ('-l' === $argument) {
+        return ['code' => 0, 'stdout' => $memoryCron, 'stderr' => ''];
+    }
+    if ('-' === $argument) {
+        $memoryCron = $corruptNextWrite
+            ? str_replace('check --due', 'check --corrupted', $input)
+                . "# task added during verification\n30 3 * * * /bin/true\n"
+            : $input;
+        $corruptNextWrite = false;
+        return ['code' => 0, 'stdout' => '', 'stderr' => ''];
+    }
+    if ('-r' === $argument) {
+        return ['code' => 0, 'stdout' => 'cli', 'stderr' => ''];
+    }
+    return ['code' => 0, 'stdout' => "Usage\n", 'stderr' => ''];
+};
+$rollbackCronRejected = false;
+try {
+    (new SystemCronManager(
+        null,
+        $runner,
+        dirname(__DIR__),
+        '/bin/sh',
+        '/bin/sh',
+        'Linux'
+    ))->install();
+} catch (RuntimeException $error) {
+    $rollbackCronRejected = false !== strpos($error->getMessage(), '状态与预期不一致');
+}
+$check(
+    $rollbackCronRejected
+        && false !== strpos($memoryCron, '# preserved cron')
+        && false !== strpos($memoryCron, '# task added during verification')
+        && false === strpos($memoryCron, 'check --corrupted'),
+    'automatic Cron rolls back only its block while preserving concurrent external tasks'
+);
+$cloneRoot = sys_get_temp_dir() . '/friendlinks-clone-' . bin2hex(random_bytes(6));
+mkdir($cloneRoot . '/bin', 0777, true);
+file_put_contents($cloneRoot . '/bin/console.php', "<?php\n");
+$cloneCron = '';
+$cloneRunner = static function (array $command, string $input) use (&$cloneCron): array {
+    $argument = $command[1] ?? '';
+    if ('-l' === $argument) {
+        return ['code' => 0, 'stdout' => $cloneCron, 'stderr' => ''];
+    }
+    if ('-' === $argument) {
+        $cloneCron = $input;
+        return ['code' => 0, 'stdout' => '', 'stderr' => ''];
+    }
+    if ('-r' === $argument) {
+        return ['code' => 0, 'stdout' => 'cli', 'stderr' => ''];
+    }
+    return ['code' => 0, 'stdout' => "Usage\n", 'stderr' => ''];
+};
+$cloneInstall = (new SystemCronManager(
+    null,
+    $cloneRunner,
+    $cloneRoot,
+    '/bin/sh',
+    '/bin/sh',
+    'Linux'
+))->install();
+$check(
+    $cloneInstall['cron_id'] !== $ownCronId
+        && false !== strpos($cloneCron, '# BEGIN FriendLinks ' . $cloneInstall['cron_id']),
+    'a cloned database derives a distinct Cron marker from the new plugin path'
+);
+@unlink($cloneRoot . '/bin/console.php');
+@rmdir($cloneRoot . '/bin');
+@rmdir($cloneRoot);
+
+$db->query($db->delete('table.options')
+    ->where('name = ?', 'friendlinks_cron_owner')->where('user = ?', 0));
+$failedInstallRunner = static function (array $command): array {
+    $argument = $command[1] ?? '';
+    if ('-l' === $argument) {
+        return ['code' => 1, 'stdout' => '', 'stderr' => 'no crontab for test'];
+    }
+    if ('-' === $argument) {
+        return ['code' => 2, 'stdout' => '', 'stderr' => 'simulated write failure'];
+    }
+    if ('-r' === $argument) {
+        return ['code' => 0, 'stdout' => 'cli', 'stderr' => ''];
+    }
+    return ['code' => 0, 'stdout' => "Usage\n", 'stderr' => ''];
+};
+$failedInstallReleasedOwner = false;
+try {
+    (new SystemCronManager(
+        null,
+        $failedInstallRunner,
+        dirname(__DIR__),
+        '/bin/sh',
+        '/bin/sh',
+        'Linux'
+    ))->install();
+} catch (RuntimeException $error) {
+    $ownerAfterFailure = $db->fetchRow($db->select('value')->from('table.options')
+        ->where('name = ?', 'friendlinks_cron_owner')->where('user = ?', 0)->limit(1));
+    $failedInstallReleasedOwner = !$ownerAfterFailure;
+}
+$check(
+    $failedInstallReleasedOwner,
+    'a failed first Cron installation releases the newly claimed system user'
+);
+(new SystemCronManager())->install();
 
 $pluginInfo = TypechoPluginRegistry::parseInfo(dirname(__DIR__) . '/Plugin.php');
 $check(
@@ -115,6 +333,7 @@ $check(
 $linkEditPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/link-edit.php');
 $linksPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/links.php');
 $categoriesPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/categories.php');
+$healthPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/health.php');
 $settingsPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/settings.php');
 $adminScript = (string) file_get_contents(dirname(__DIR__) . '/assets/admin.js');
 $actionSource = (string) file_get_contents(dirname(__DIR__) . '/Action.php');
@@ -181,6 +400,13 @@ $check(
     false !== strpos($settingsPanel, 'name="http_worker_enabled"')
         && false !== strpos($actionSource, "'worker_disabled'"),
     'signed HTTP Worker requires explicit administrator enablement'
+);
+$check(
+    false !== strpos($healthPanel, 'SystemCronManager')
+        && false !== strpos($healthPanel, '自动定时任务')
+        && false === strpos($healthPanel, '手动配置')
+        && false === strpos($healthPanel, 'flm-code'),
+    'health page reports automatic Cron state without manual setup instructions'
 );
 $check(
     false === strpos($pluginSource, 'panelTable')
@@ -970,7 +1196,35 @@ $settings = Settings::all();
 $settings['frontend_template'] = 'minimal';
 Settings::save($settings);
 
+putenv('FRIENDLINKS_FAKE_CRONTAB_FAIL_WRITE=1');
+$failedDeactivationRejected = false;
+try {
+    Plugin::deactivate();
+} catch (\Typecho\Plugin\Exception $error) {
+    $failedDeactivationRejected = false !== strpos($error->getMessage(), '无法写入当前用户 crontab');
+}
+putenv('FRIENDLINKS_FAKE_CRONTAB_FAIL_WRITE');
+$panelRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
+$panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
+$check(
+    $failedDeactivationRejected
+        && in_array('友情链接 · FriendLinks', $panelTable['parent'] ?? [], true)
+        && false !== strpos(
+            (string) file_get_contents($fakeCronState),
+            '# BEGIN FriendLinks ' . $ownCronId
+        ),
+    'Cron removal failure rejects deactivation before removing admin registration'
+);
+
 Plugin::deactivate();
+$cronContents = (string) file_get_contents($fakeCronState);
+$check(
+    false === strpos($cronContents, '# BEGIN FriendLinks ' . $ownCronId)
+        && false !== strpos($cronContents, '# BEGIN FriendLinks ' . $otherCronId)
+        && false !== strpos($cronContents, "# unrelated task\n0 0 * * * /bin/true"),
+    'deactivation removes only this instance Cron block'
+);
 $panelRow = $db->fetchRow($db->select('value')->from('table.options')
     ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
 $panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
@@ -1004,6 +1258,10 @@ $check(!$menuIndexRow, 'deactivation removes the stored FriendLinks menu index')
 $db->query($db->delete('table.options')->where('name = ?', 'plugin:FriendLinks'));
 Plugin::activate();
 Plugin::configHandle(Settings::defaults(), true);
+$check(
+    !empty((new SystemCronManager())->inspect()['installed']),
+    'reactivation automatically restores the managed Cron task'
+);
 $check('minimal' === Settings::get('frontend_template'), 'settings survive deactivate and reactivate');
 $check(
     $rotatedWorkerSecret === Settings::get('worker_secret'),
@@ -1011,6 +1269,37 @@ $check(
 );
 
 Plugin::deactivate();
+$check(
+    false === strpos(
+        (string) file_get_contents($fakeCronState),
+        '# BEGIN FriendLinks ' . $ownCronId
+    ),
+    'final deactivation removes the restored Cron task'
+);
+putenv('FRIENDLINKS_FAKE_CRONTAB_FAIL_WRITE=1');
+$failedActivationRejected = false;
+try {
+    Plugin::activate();
+} catch (\Typecho\Plugin\Exception $error) {
+    $failedActivationRejected = false !== strpos($error->getMessage(), '无法写入当前用户 crontab');
+}
+putenv('FRIENDLINKS_FAKE_CRONTAB_FAIL_WRITE');
+$panelRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
+$panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
+$check(
+    $failedActivationRejected
+        && !in_array('友情链接 · FriendLinks', $panelTable['parent'] ?? [], true)
+        && false === strpos(
+            (string) file_get_contents($fakeCronState),
+            '# BEGIN FriendLinks ' . $ownCronId
+        )
+        && false !== strpos(
+            (string) file_get_contents($fakeCronState),
+            '# BEGIN FriendLinks ' . $otherCronId
+        ),
+    'Cron installation failure rejects activation and rolls back admin registration'
+);
 $migration->uninstall();
 foreach (['categories', 'links', 'current_status', 'check_history', 'runs', 'cache', 'notification_outbox'] as $table) {
     $tableExists = true;
@@ -1024,6 +1313,20 @@ foreach (['categories', 'links', 'current_status', 'check_history', 'runs', 'cac
 $workerSecretRow = $db->fetchRow($db->select('value')->from('table.options')
     ->where('name = ?', 'friendlinks_worker_secret')->where('user = ?', 0)->limit(1));
 $check(!$workerSecretRow, 'uninstall removes the dedicated HTTP Worker secret');
+$cronIdRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_cron_id')->where('user = ?', 0)->limit(1));
+$check(!$cronIdRow, 'uninstall removes the dedicated Cron instance identifier');
+$cronOwnerRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_cron_owner')->where('user = ?', 0)->limit(1));
+$check(!$cronOwnerRow, 'uninstall removes the Cron system user identifier');
+$cronPhpRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_cron_php')->where('user = ?', 0)->limit(1));
+$check(!$cronPhpRow, 'uninstall removes the Cron PHP CLI path');
 Helper::removeMenu('友情链接');
+@unlink($fakeCronState);
+putenv('FRIENDLINKS_CRONTAB_BINARY');
+putenv('FRIENDLINKS_PHP_CLI');
+putenv('FRIENDLINKS_FAKE_CRONTAB_STATE');
+putenv('FRIENDLINKS_FAKE_CRONTAB_REQUIRE_C_LOCALE');
 
 fwrite(STDOUT, "OK: {$assertions} Typecho integration assertions\n");

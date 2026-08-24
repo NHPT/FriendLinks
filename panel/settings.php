@@ -200,7 +200,7 @@ $workerUrl = Router::url('friendlinks-worker', [], $options->index);
               <input type="checkbox" name="http_worker_enabled" value="1"<?php echo $settings['http_worker_enabled'] ? ' checked' : ''; ?>>
               启用签名 HTTP Worker
             </label>
-            <p class="flm-help">默认关闭。仅在无法使用 CLI Cron、且已经配置外部 HTTPS 调用脚本时启用。</p>
+            <p class="flm-help">默认关闭。系统 CLI Cron 已由插件自动管理；仅在需要外部监控平台主动触发时启用。</p>
             <label>请求入口</label>
             <p><code><?php echo flm_e($workerUrl); ?></code></p>
             <label>签名密钥</label>

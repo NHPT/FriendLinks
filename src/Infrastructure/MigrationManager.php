@@ -80,11 +80,14 @@ final class MigrationManager
 
         $db = $this->database->native();
         $db->query($db->delete('table.options')->where(
-            'name = ? OR name = ? OR name = ? OR name = ?',
+            'name = ? OR name = ? OR name = ? OR name = ? OR name = ? OR name = ? OR name = ?',
             self::VERSION_OPTION,
             'friendlinks_settings_backup',
             'friendlinks_menu_index',
-            'friendlinks_worker_secret'
+            'friendlinks_worker_secret',
+            'friendlinks_cron_id',
+            'friendlinks_cron_owner',
+            'friendlinks_cron_php'
         ));
     }
 

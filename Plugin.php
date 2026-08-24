@@ -10,6 +10,7 @@ use Typecho\Widget\Helper\Layout;
 use TypechoPlugin\FriendLinks\Application\Settings;
 use TypechoPlugin\FriendLinks\Infrastructure\Database;
 use TypechoPlugin\FriendLinks\Infrastructure\MigrationManager;
+use TypechoPlugin\FriendLinks\Infrastructure\SystemCronManager;
 use TypechoPlugin\FriendLinks\Presentation\ContentInjector;
 use Utils\Helper;
 
@@ -20,7 +21,7 @@ require_once __DIR__ . '/vendor/autoload.php';
  *
  * @package FriendLinks
  * @author NHPT
- * @version 0.2.3
+ * @version 0.2.4
  * @since 1.2.0
  * @link https://github.com/NHPT/FriendLinks
  */
@@ -55,55 +56,68 @@ final class Plugin implements PluginInterface
         (new MigrationManager())->migrate();
         self::removeAdminRegistration();
 
-        $menuIndex = Helper::addMenu(self::MENU_NAME);
+        $menuIndex = null;
+        $cron = new SystemCronManager();
         try {
-            self::saveMenuIndex($menuIndex);
-            Helper::addPanel(
-                $menuIndex,
-                self::PANELS[0],
-                '友链',
-                '友链管理',
-                'administrator',
-                false,
-                'extending.php?panel=FriendLinks/panel/link-edit.php'
-            );
-            Helper::addPanel($menuIndex, self::PANELS[1], '编辑友链', '编辑友链', 'administrator', true);
-            Helper::addPanel($menuIndex, self::PANELS[2], '分类', '友链分类', 'administrator');
-            Helper::addPanel($menuIndex, self::PANELS[3], '健康', '检测健康总览', 'administrator');
-            Helper::addPanel($menuIndex, self::PANELS[4], '历史', '检测历史', 'administrator');
-            Helper::addPanel($menuIndex, self::PANELS[5], '导入导出', '导入导出', 'administrator');
-            Helper::addPanel($menuIndex, self::PANELS[6], '通知', '通知设置与投递记录', 'administrator');
-            Helper::addPanel($menuIndex, self::PANELS[7], '设置', 'FriendLinks 设置', 'administrator');
+            $menuIndex = self::registerAdminRegistration();
+            self::registerEndpoints();
+
+            // Keep serialized callbacks on Plugin so Typecho loads this file and its PSR-4 loader first.
+            \Widget\Base\Contents::pluginHandle()->contentEx = [__CLASS__, 'injectLinks'];
+            \Widget\Archive::pluginHandle()->header = [__CLASS__, 'frontendHeader'];
+
+            $cron->install();
         } catch (\Throwable $error) {
+            try {
+                $cron->remove();
+            } catch (\Throwable $ignored) {
+            }
+            try {
+                Helper::removeAction(self::ACTION_NAME);
+            } catch (\Throwable $ignored) {
+            }
+            try {
+                Helper::removeRoute(self::ROUTE_NAME);
+            } catch (\Throwable $ignored) {
+            }
             try {
                 self::removeAdminRegistration($menuIndex);
             } catch (\Throwable $ignored) {
             }
-            throw new \Typecho\Plugin\Exception('FriendLinks 后台菜单注册失败：' . $error->getMessage());
+            throw new \Typecho\Plugin\Exception('FriendLinks 启用失败：' . $error->getMessage());
         }
 
-        Helper::addAction(self::ACTION_NAME, 'FriendLinks_Action');
-        Helper::addRoute(self::ROUTE_NAME, '/friendlinks/worker', 'FriendLinks_Action', 'worker');
-
-        // Keep serialized callbacks on Plugin so Typecho loads this file and its PSR-4 loader first.
-        \Widget\Base\Contents::pluginHandle()->contentEx = [__CLASS__, 'injectLinks'];
-        \Widget\Archive::pluginHandle()->header = [__CLASS__, 'frontendHeader'];
-
-        return 'FriendLinks 已启用。请先选择或创建普通独立页面，并配置系统 Cron。';
+        return 'FriendLinks 已启用，系统 Cron 已自动安装并每 5 分钟运行。';
     }
 
     public static function deactivate()
     {
+        $cron = new SystemCronManager();
+        $cronRemoved = false;
         try {
             self::backupSettings();
+            $cron->remove();
+            $cronRemoved = true;
             self::removeAdminRegistration();
             Helper::removeAction(self::ACTION_NAME);
             Helper::removeRoute(self::ROUTE_NAME);
         } catch (\Throwable $error) {
-            throw new \Typecho\Plugin\Exception('FriendLinks 停用清理失败：' . $error->getMessage());
+            $rollbackError = null;
+            if ($cronRemoved) {
+                try {
+                    self::restoreAfterFailedDeactivation($cron);
+                } catch (\Throwable $rollback) {
+                    $rollbackError = $rollback->getMessage();
+                }
+            }
+            $message = 'FriendLinks 停用清理失败：' . $error->getMessage();
+            if (null !== $rollbackError) {
+                $message .= '；Cron 回滚失败：' . $rollbackError;
+            }
+            throw new \Typecho\Plugin\Exception($message);
         }
 
-        return 'FriendLinks 已停用，业务数据仍保留。';
+        return 'FriendLinks 已停用，系统 Cron 已删除，业务数据仍保留。';
     }
 
     public static function config(Form $form)
@@ -263,6 +277,43 @@ final class Plugin implements PluginInterface
         }
         $db->query($db->delete('table.options')
             ->where('name = ?', self::MENU_INDEX_OPTION)->where('user = ?', 0));
+    }
+
+    private static function registerAdminRegistration(): int
+    {
+        $menuIndex = Helper::addMenu(self::MENU_NAME);
+        self::saveMenuIndex($menuIndex);
+        Helper::addPanel(
+            $menuIndex,
+            self::PANELS[0],
+            '友链',
+            '友链管理',
+            'administrator',
+            false,
+            'extending.php?panel=FriendLinks/panel/link-edit.php'
+        );
+        Helper::addPanel($menuIndex, self::PANELS[1], '编辑友链', '编辑友链', 'administrator', true);
+        Helper::addPanel($menuIndex, self::PANELS[2], '分类', '友链分类', 'administrator');
+        Helper::addPanel($menuIndex, self::PANELS[3], '健康', '检测健康总览', 'administrator');
+        Helper::addPanel($menuIndex, self::PANELS[4], '历史', '检测历史', 'administrator');
+        Helper::addPanel($menuIndex, self::PANELS[5], '导入导出', '导入导出', 'administrator');
+        Helper::addPanel($menuIndex, self::PANELS[6], '通知', '通知设置与投递记录', 'administrator');
+        Helper::addPanel($menuIndex, self::PANELS[7], '设置', 'FriendLinks 设置', 'administrator');
+        return $menuIndex;
+    }
+
+    private static function registerEndpoints(): void
+    {
+        Helper::addAction(self::ACTION_NAME, 'FriendLinks_Action');
+        Helper::addRoute(self::ROUTE_NAME, '/friendlinks/worker', 'FriendLinks_Action', 'worker');
+    }
+
+    private static function restoreAfterFailedDeactivation(SystemCronManager $cron): void
+    {
+        self::removeAdminRegistration();
+        self::registerAdminRegistration();
+        self::registerEndpoints();
+        $cron->install();
     }
 
     private static function saveMenuIndex(int $menuIndex): void

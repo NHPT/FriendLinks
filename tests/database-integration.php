@@ -179,5 +179,29 @@ $check(
     'notification error remains valid UTF-8 after truncation'
 );
 
+$db->query($db->insert('table.options')->rows([
+    'name' => 'friendlinks_cron_id',
+    'user' => 0,
+    'value' => str_repeat('c', 32),
+]));
+$db->query($db->insert('table.options')->rows([
+    'name' => 'friendlinks_cron_owner',
+    'user' => 0,
+    'value' => '1000',
+]));
+$db->query($db->insert('table.options')->rows([
+    'name' => 'friendlinks_cron_php',
+    'user' => 0,
+    'value' => '/usr/bin/php',
+]));
 $migration->uninstall();
+$cronOption = $database->fetchRowWrite($db->select('value')->from('table.options')
+    ->where(
+        'name = ? OR name = ? OR name = ?',
+        'friendlinks_cron_id',
+        'friendlinks_cron_owner',
+        'friendlinks_cron_php'
+    )
+    ->where('user = ?', 0)->limit(1));
+$check(!$cronOption, 'uninstall removes Cron instance, system user and PHP CLI identifiers');
 fwrite(STDOUT, "OK: {$assertions} {$database->driver()} database assertions\n");

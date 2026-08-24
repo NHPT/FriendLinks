@@ -8,6 +8,7 @@ use TypechoPlugin\FriendLinks\Application\Settings;
 use TypechoPlugin\FriendLinks\Application\Worker;
 use TypechoPlugin\FriendLinks\Infrastructure\MigrationManager;
 use TypechoPlugin\FriendLinks\Infrastructure\Repositories;
+use TypechoPlugin\FriendLinks\Infrastructure\SystemCronManager;
 use TypechoPlugin\FriendLinks\Infrastructure\WorkerSigner;
 use Utils\Helper;
 use Widget\ActionInterface;
@@ -365,6 +366,7 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
         if ('DELETE' !== (string) $this->request->get('confirmation', '')) {
             throw new InvalidArgumentException('请输入 DELETE 确认卸载。');
         }
+        (new SystemCronManager())->remove();
         Helper::removePlugin('FriendLinks');
         (new MigrationManager())->uninstall();
         Notice::alloc()->set('FriendLinks 已停用，业务表已删除。', 'success');

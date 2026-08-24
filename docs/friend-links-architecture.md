@@ -92,19 +92,25 @@ public static function injectLinks($content, $widget, $lastResult = null)
 
 Typecho 没有可靠的内建定时任务，因此采用：
 
-1. CLI Worker：推荐方案，由系统 Cron 调用。
-2. 签名 HTTP Worker：无法使用 CLI Cron 时的兼容方案。
+1. CLI Worker：主方案，由插件自动安装的系统 Cron 调用。
+2. 签名 HTTP Worker：默认关闭的可选外部触发入口。
 3. 访客触发的伪 Cron：不实现。
 
-插件不能安全、通用地修改 Linux crontab、宝塔计划任务或虚拟主机控制面板，因此系统 Cron 由管理员手动配置一次。CLI 入口在执行任务前检查 Typecho 的插件启用状态：停用 FriendLinks 后直接空操作并返回成功，再次启用后沿用原 Cron 自动恢复。
+插件明确采用 Linux-only 约束：启用时通过参数化 `proc_open` 调用当前 PHP Web 用户的 `crontab`，自动安装每 5 分钟运行一次的任务；停用和卸载时自动删除。缺少 `proc_open`、`crontab`、可用 PHP CLI 或用户 crontab 权限时阻止启用，不回退为访客请求触发。
 
-推荐命令形式：
+每个站点在数据库中持久化随机 Cron 种子和安装时的 Linux 有效 UID，并结合规范化插件路径派生实例 ID，使用成对注释标记管理自己的块。数据库克隆到同一系统用户的其他路径时会派生不同 ID；后续检查、停用和卸载必须由同一系统用户执行：
 
-```bash
-php usr/plugins/FriendLinks/bin/console.php check --due --limit=50
+```text
+# BEGIN FriendLinks <instance-id>
+*/5 * * * * '<php-cli>' '<plugin>/bin/console.php' check --due --limit=50 --max-seconds=240
+# END FriendLinks <instance-id>
 ```
 
-插件后台展示可直接使用的 Cron 示例、最近心跳、最近成功运行时间和积压任务数量。
+安装和删除必须保留标记之外的全部用户 Cron，并通过同一 Unix 用户共享的文件锁串行化；写入前再次检查原内容，写入后重新读取并逐字验证，验证失败时恢复原 crontab。重复启用只替换本实例块，不产生重复任务。CLI 入口仍在执行前检查 Typecho 插件启用状态，关闭停用过程与已进入调度队列进程之间的时序窗口。
+
+`crontab -l` 与 `crontab -` 不提供跨工具原子比较交换语义，因此插件启用或停用期间不得同时通过 `crontab -e` 或主机面板修改同一 Linux 用户的其他任务。FriendLinks 自身的多站点并发由共享锁覆盖，外部并发编辑只能通过写前复核和写后校验检测，无法在 user-crontab 接口层彻底消除竞争窗口。
+
+插件后台展示自动 Cron 状态、最近心跳、最近成功运行时间和积压任务数量，不提供手工 Cron 配置入口。
 
 ## 4. 总体结构
 
@@ -223,10 +229,11 @@ FriendLinks/
 
 - 检查 Typecho、PHP 和必要扩展版本。
 - 创建或升级数据库结构。
+- 自动安装、验证和删除带实例标记的 Linux 用户 Cron。
 - 注册后台菜单和面板。
 - 注册管理 Action、内容钩子、页头和页脚资源钩子。
 - 注册签名 HTTP Worker。
-- 停用时移除路由和面板，但不删除业务数据。
+- 停用时先删除自动 Cron，再移除路由和面板，但不删除业务数据。
 
 删除数据必须通过 Typecho 插件配置页中的“卸载并删除数据”操作完成，并要求管理员输入 `DELETE` 后二次确认。
 
@@ -739,9 +746,9 @@ WHERE link_id = ?
 
 ## 15. HTTP Worker 鉴权
 
-HTTP Worker 只作为无法运行 CLI 的兼容入口，并要求 HTTPS。
+HTTP Worker 作为可选的外部主动触发入口，并要求 HTTPS。
 HTTP Worker 默认关闭，管理员必须在设置页显式启用；未启用时入口返回 `403 worker_disabled`，不执行验签、检测或通知投递。CLI Worker 始终是默认和推荐方案。
-入口只接受固定 Typecho 路由上的 `POST`。`bin/console.php` 必须检查 `PHP_SAPI`，拒绝通过 Web SAPI 执行，并在访问插件业务表前确认 FriendLinks 仍处于启用状态；后台生成的 Cron 示例使用当前站点的绝对文件路径，不依赖 Cron 工作目录。
+入口只接受固定 Typecho 路由上的 `POST`。`bin/console.php` 必须检查 `PHP_SAPI`，拒绝通过 Web SAPI 执行，并在访问插件业务表前确认 FriendLinks 仍处于启用状态；自动 Cron 使用当前站点和 PHP CLI 的绝对路径，不依赖 Cron 工作目录。
 
 请求头：
 
@@ -875,6 +882,7 @@ SHA-256(body)
 
 | 条件 | 行为 |
 | --- | --- |
+| 非 Linux、缺少 `proc_open`/`crontab`/PHP CLI 或无 crontab 权限 | 阻止启用插件，不创建不受调度的半可用状态 |
 | 缺少 cURL | 阻止启用自动检测，管理和展示仍可用 |
 | 缺少 PHP OpenSSL 扩展 | 关闭额外证书元数据解析；cURL 验证和 HMAC Worker 不受影响 |
 | 缺少 intl | 非 ASCII 域名检测禁用，ASCII 域名正常 |
@@ -928,6 +936,7 @@ duration_ms
 
 - MySQL、PostgreSQL、SQLite 的安装、升级和卸载。
 - Typecho 插件激活、停用、Action 和权限。
+- 自动 Cron 首次安装、重复启用去重、无关任务保留、停用删除和失败回滚。
 - 普通页面内容注入及非目标页面无变化。
 - 200、3xx、401、403、404、429、5xx、超时和大响应。
 - 有效、过期、未生效、自签名和主机名不匹配证书。
@@ -945,6 +954,7 @@ duration_ms
 - 存储型 XSS、属性注入和恶意 Logo URL。
 - CSRF、低权限 Action 调用和批量 ID 越权。
 - HTTP Worker 重放、过期签名和时序比较。
+- Cron 命令参数化、路径控制字符、实例标记隔离和超大 crontab 拒绝。
 - Webhook SSRF、钉钉地址白名单、SMTP 证书校验和敏感字段不回显。
 
 ### 22.4 兼容矩阵
@@ -952,6 +962,7 @@ duration_ms
 - PHP 7.4、8.1、8.3、8.4、8.5。
 - Typecho 1.2 稳定版和当前主分支。
 - MySQL / MariaDB、PostgreSQL、SQLite。
+- Linux，且 PHP Web 用户可管理自己的用户 crontab。
 - 默认主题、Classic 主题和多种普通第三方主题。
 
 ## 23. 分阶段实施
