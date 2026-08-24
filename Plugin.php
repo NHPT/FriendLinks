@@ -70,8 +70,9 @@ final class Plugin implements PluginInterface
             self::registerEndpoints();
 
             // Keep serialized callbacks on Plugin so Typecho loads this file and its PSR-4 loader first.
-            \Widget\Base\Contents::pluginHandle()->contentEx = [__CLASS__, 'injectLinks'];
+            \Widget\Base\Contents::pluginHandle()->contentEx_99999 = [__CLASS__, 'injectLinks'];
             \Widget\Archive::pluginHandle()->header = [__CLASS__, 'frontendHeader'];
+            \Widget\Archive::pluginHandle()->footer = [__CLASS__, 'frontendFooter'];
 
             try {
                 $cron->install();
@@ -263,6 +264,11 @@ final class Plugin implements PluginInterface
     public static function frontendHeader($header, $widget, $lastResult = null)
     {
         return ContentInjector::header($header, $widget, $lastResult);
+    }
+
+    public static function frontendFooter($widget, $lastResult = null)
+    {
+        return ContentInjector::footer($widget, $lastResult);
     }
 
     private static function backupSettings(): void

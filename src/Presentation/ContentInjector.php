@@ -9,6 +9,9 @@ use Widget\Options;
 
 final class ContentInjector
 {
+    /** @var string|null */
+    private static $lastRenderedHtml;
+
     public static function injectLinks($content, $widget, $lastResult = null)
     {
         $baseContent = null === $lastResult ? $content : $lastResult;
@@ -17,9 +20,10 @@ final class ContentInjector
         }
 
         try {
-            $html = (new Renderer())->render((new Repositories())->frontendLinks());
+            $html = self::renderLinks();
             return (string) $baseContent . $html;
         } catch (\Throwable $error) {
+            self::logRenderFailure($error);
             return $baseContent;
         }
     }
@@ -55,6 +59,37 @@ final class ContentInjector
         return null === $lastResult ? $header : $lastResult;
     }
 
+    public static function footer($widget, $lastResult = null)
+    {
+        if (!self::isTargetPage($widget)) {
+            return $lastResult;
+        }
+
+        try {
+            $html = self::$lastRenderedHtml ?? self::renderLinks();
+        } catch (\Throwable $error) {
+            self::logRenderFailure($error);
+            return $lastResult;
+        }
+
+        echo '<template id="flm-footer-fallback-template">' . $html . '</template>' . "\n";
+        echo '<script>(function(){'
+            . 'var t=document.getElementById("flm-footer-fallback-template");'
+            . 'if(!t)return;'
+            . 'if(document.querySelector(".flm-root")){t.remove();return;}'
+            . 'var target=document.querySelector(".post-content")'
+            . '||document.querySelector(".entry-content")'
+            . '||document.querySelector("article")'
+            . '||document.querySelector("main");'
+            . 'var fragment=t.content?t.content.cloneNode(true):null;'
+            . 'if(fragment&&target){target.appendChild(fragment);}'
+            . 'else if(fragment&&t.parentNode){t.parentNode.insertBefore(fragment,t);}'
+            . 't.remove();'
+            . '})();</script>' . "\n";
+
+        return $lastResult;
+    }
+
     private static function isTargetPage($widget): bool
     {
         if (!$widget instanceof Archive || !$widget->is('page')) {
@@ -72,5 +107,16 @@ final class ContentInjector
         } catch (\Throwable $error) {
             return false;
         }
+    }
+
+    private static function renderLinks(): string
+    {
+        self::$lastRenderedHtml = (new Renderer())->render((new Repositories())->frontendLinks());
+        return self::$lastRenderedHtml;
+    }
+
+    private static function logRenderFailure(\Throwable $error): void
+    {
+        error_log('[FriendLinks] frontend render failed: ' . $error->getMessage());
     }
 }

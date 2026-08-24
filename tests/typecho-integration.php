@@ -34,6 +34,7 @@ use TypechoPlugin\FriendLinks\Infrastructure\NotificationChannelInterface;
 use TypechoPlugin\FriendLinks\Infrastructure\Repositories;
 use TypechoPlugin\FriendLinks\Infrastructure\SystemCronManager;
 use TypechoPlugin\FriendLinks\Plugin;
+use TypechoPlugin\FriendLinks\Presentation\ContentInjector;
 use TypechoPlugin\FriendLinks\Presentation\Renderer;
 use TypechoPlugin\FriendLinks\Presentation\TemplateCatalog;
 use Utils\Helper;
@@ -97,6 +98,14 @@ $db->query($db->insert('table.options')->rows([
 ]));
 Plugin::activate();
 TypechoPluginRegistry::activate('FriendLinks');
+$pluginRegistry = TypechoPluginRegistry::export();
+$contentExHooks = $pluginRegistry['handles']['Widget_Abstract_Contents:contentEx']
+    ?? $pluginRegistry['handles']['Widget_Base_Contents:contentEx']
+    ?? [];
+$check(
+    isset($contentExHooks[99989]) && isset($pluginRegistry['handles']['Widget_Archive:footer']),
+    'frontend renderer registers high-priority content hook and footer fallback'
+);
 $defaultWorkerSecret = Settings::defaults()['worker_secret'];
 $check('' === $defaultWorkerSecret, 'default settings do not generate a transient HTTP Worker secret');
 $check(
@@ -991,6 +1000,29 @@ $check(false !== strpos($html, 'flm-status-summary'), 'renderer groups the compa
 $check(false !== strpos($html, 'flm-status-short'), 'renderer exposes compact card status');
 $check(false !== strpos($html, 'flm-status-detail'), 'renderer exposes detailed hover status');
 $check(false !== strpos((new Renderer())->render([]), '暂无公开友链'), 'empty frontend renders an explicit empty state');
+$archiveReflection = new ReflectionClass(\Widget\Archive::class);
+$archive = $archiveReflection->newInstanceWithoutConstructor();
+foreach ([
+    'archiveType' => 'page',
+    'archiveSingle' => true,
+    'makeSinglePageAsFrontPage' => false,
+    'archiveSlug' => 'friendlinks',
+] as $property => $value) {
+    $archiveProperty = $archiveReflection->getProperty($property);
+    $archiveProperty->setAccessible(true);
+    $archiveProperty->setValue($archive, $value);
+}
+$archive->cid = $pageId;
+ob_start();
+ContentInjector::footer($archive);
+$footerFallback = (string) ob_get_clean();
+$check(
+    false !== strpos($footerFallback, 'flm-footer-fallback-template')
+        && false !== strpos($footerFallback, 'document.querySelector(".post-content")')
+        && false !== strpos($footerFallback, '&lt;Example&gt;')
+        && false === strpos($footerFallback, '<Example>'),
+    'frontend footer fallback can inject rendered links when theme bypasses content hooks'
+);
 $templates = (new TemplateCatalog())->all();
 foreach ($templates as $template) {
     $settings = Settings::all();
