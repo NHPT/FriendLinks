@@ -18,7 +18,7 @@ FriendLinks 不依赖主题的友链模板，也不会在访客请求中临时�
 | 主题解耦 | 使用普通独立页面和 Typecho 标准钩子，不要求主题提供 `page-links.php` 或专用函数 |
 | 独立管理 | 友链、分类、健康、历史、导入导出、通知和设置均位于独立后台菜单 |
 | 多维检测 | DNS、HTTP、重定向、TLS 证书、域名 RDAP 到期信息 |
-| 自动调度 | 启用时自动安装 Linux 用户 Cron，停用或卸载时精确删除 |
+| 自动调度 | 环境支持时自动安装 Linux 用户 Cron，停用或卸载时精确删除 |
 | 状态聚合 | 连续失败阈值、组件独立周期、随机抖动、失败退避和数据过期判断 |
 | 主动通知 | 钉钉加签机器人、通用 Webhook、SMTP 邮件、可编辑纯文本模板 |
 | 持久化投递 | 检测结果与通知事件原子入库，Outbox 异步发送、租约恢复、冷却去重和最多五次尝试 |
@@ -56,19 +56,18 @@ Logo 方阵用于更强调站点标识的页面：隐藏描述，右上角仅保
 - Typecho 1.2.0 或更高版本
 - PHP 7.4 或更高版本
 - MySQL / MariaDB、PostgreSQL 或 SQLite
-- Linux，并允许 PHP Web 运行用户执行 `crontab`
-- PHP `proc_open` 与可用的 PHP CLI
 - PHP cURL：健康检测、RDAP、钉钉和通用 Webhook 必需
 - PHP intl：安全检测国际化域名时必需
 - PHP OpenSSL：使用 STARTTLS 或 SMTPS 邮件通知时必需
 
 缺少 cURL 时仍可管理和展示友链，但不能启用自动检测，也不能发送 HTTP 类通知。
+自动安装 CLI Cron 另外要求 Linux、可用的 `proc_open`、PHP CLI，以及 PHP Web 用户的 crontab 权限；不满足时可改用手工 Cron 或签名 HTTP Worker。
 
 ## 安装
 
 1. 从 [GitHub Releases](https://github.com/NHPT/FriendLinks/releases/latest) 下载最新稳定版 `FriendLinks.zip`，不要直接使用缺少 `vendor/` 的源码归档。
 2. 将目录放入 Typecho 的 `usr/plugins/`。
-3. 在 Typecho 后台启用 FriendLinks；插件会自动安装每 5 分钟执行一次的系统 Cron。
+3. 在 Typecho 后台启用 FriendLinks；环境允许时插件会自动安装系统 Cron，否则启用结果会提示手工配置。
 4. 在 Typecho 的“管理 → 独立页面”中创建普通页面，再到“友情链接 → 设置”选择并绑定。
 5. 如需主动告警，在“友情链接 → 通知”中配置渠道并发送测试通知。
 
@@ -88,7 +87,7 @@ Logo 方阵用于更强调站点标识的页面：隐藏描述，右上角仅保
 
 ## 定时检测
 
-FriendLinks 默认使用 CLI Worker。启用插件时会自动查找 `crontab` 和可运行本站的 PHP CLI，向当前 PHP Web 用户的 crontab 写入一个每 5 分钟执行的任务。管理员不需要手动复制或维护 Cron 命令。
+FriendLinks 默认使用 CLI Worker。启用插件时会自动查找 `crontab` 和可运行本站的 PHP CLI，向当前 PHP Web 用户的 crontab 写入每分钟唤醒一次的调度器。CLI 根据数据库配置判断是否真正执行，默认每 5 分钟运行。
 
 每个安装实例使用数据库随机种子与规范化插件路径派生独立标识，包围自身 Cron 块。数据库克隆到同一系统用户的其他路径时会得到不同标识；重复启用只更新当前实例块，不产生重复任务，也不会扫描、删除或改写其他 Cron。停用和显式卸载会先精确删除该块；删除失败时停用操作会被阻止。
 
@@ -108,13 +107,40 @@ Linux 用户 crontab 没有跨工具的原子比较写入接口。插件会锁�
 
 CLI Worker 只领取已到期任务。保存已启用自动检测的公开友链时，后台先将该友链标记为立即到期并返回列表，列表页随后自动发起独立检测请求，因此保存本身不会等待网络探测。浏览器请求未完成时，任务仍保持到期状态，由下一次 CLI Cron 或签名 HTTP Worker 接续处理。列表中的“立即检测”和“完整复检”是管理员明确触发的同步操作，受 30 秒运行预算限制。
 
-非标准安装可以通过 Web 服务环境变量 `FRIENDLINKS_CRONTAB_BINARY` 和 `FRIENDLINKS_PHP_CLI` 指定绝对可执行路径；这只覆盖自动探测路径，不需要手动创建 Cron。任一前置检查、写入或回读校验失败时，插件会拒绝启用并撤销本次后台注册。
+CLI Worker 页面同时显示自动任务是否安装以及最近一次 CLI 运行状态。可分别设置周期数值与秒/分钟/小时/天/周/月单位、每批处理条数和单次运行预算。当前环境无法自动管理 Cron 时，CLI Worker 页签会显示红色告警、禁用这些控件，并在该页签内禁用保存按钮；页面与展示、检测策略及 HTTP Worker 设置仍然有效。PHP CLI 路径、crontab 路径和原始命令始终不接受后台输入。
+
+| 参数 | 可选范围 | 默认值 |
+| --- | --- | --- |
+| 调度周期 | 60-604800 秒、1-10080 分钟、1-168 小时、1-365 天、1-52 周或 1-12 月；月按 30 天折算 | 5 分钟 |
+| 每批处理条数 | 1-500 | 50 |
+| 单次运行预算 | 30-3600 秒 | 240 秒 |
+
+非标准安装可以通过 Web 服务环境变量 `FRIENDLINKS_CRONTAB_BINARY` 和 `FRIENDLINKS_PHP_CLI` 指定绝对可执行路径。Cron 状态损坏、安装用户不一致或写后校验失败仍会阻止启用；单纯缺少自动管理能力时插件保持可用并切换为手工调度模式。
 
 一次自动任务同时处理到期检测和通知 Outbox，不需要额外的通知 Cron。CLI 入口仍会检查插件启用状态，避免已进入执行队列的旧进程在停用后继续工作。
 
+### 手工 CLI Cron
+
+宝塔、虚拟主机或禁用 `proc_open` 的环境无法由插件自动修改系统任务时，可在主机面板中创建 Shell 任务。PHP CLI 和插件路径必须替换为服务器上的绝对路径：
+
+推荐每分钟唤醒，由插件读取数据库设置判断是否真正执行：
+
+```cron
+* * * * * /usr/bin/php /path/to/typecho/usr/plugins/FriendLinks/bin/console.php check --scheduled --due >/dev/null 2>&1
+```
+
+如果不希望读取数据库调度，也可以由面板直接维护固定周期，并显式指定每批条数和运行预算：
+
+```cron
+0 */6 * * * /usr/bin/php /path/to/typecho/usr/plugins/FriendLinks/bin/console.php check --due --limit=100 --max-seconds=600 >/dev/null 2>&1
+0 2 * * * /usr/bin/php /path/to/typecho/usr/plugins/FriendLinks/bin/console.php check --due --limit=200 --max-seconds=1200 >/dev/null 2>&1
+```
+
+使用 `--scheduled --due` 时，调度周期、每批条数和运行预算由设置页维护；不使用 `--scheduled` 时，这些参数由 Cron 命令本身维护，不受设置页控制。手工 Cron 不会被插件自动删除，停用或卸载前应在主机面板中删除；即使暂未删除，CLI 也会在插件停用时自动空操作。
+
 ### 签名 HTTP Worker
 
-签名 HTTP Worker 是默认关闭的可选补充入口，可供外部监控平台主动触发。配置顺序：
+签名 HTTP Worker 是默认关闭的可选补充入口，可供外部监控平台主动触发。它可以与 CLI Worker 同时启用；数据库租约保证同一友链不会被两个 Worker 同时领取。配置顺序：
 
 1. 使用 `openssl rand -hex 32` 生成密钥。
 2. 在“友情链接 → 设置 → HTTP Worker”输入两次新密钥并确认轮换。
@@ -422,8 +448,8 @@ flm_notification_outbox
 
 激活时自动按当前数据库执行版本化迁移，不需要手动导入 SQL。当前 Schema 版本为 `2`。
 
-- 停用：先删除本实例的自动 Cron，再移除菜单、路由、Action 和前端钩子，保留表、友链、历史及通知配置。
-- 再启用：自动恢复配置、数据和系统 Cron；`friendlinks_worker_secret` 独立保存在数据库中，不会因停用而变化。
+- 停用：先删除本实例自动安装的 Cron，再移除菜单、路由、Action 和前端钩子，保留表、友链、历史及通知配置；手工任务需由管理员自行删除。
+- 再启用：自动恢复配置和数据，并在环境支持时重新安装系统 Cron；`friendlinks_worker_secret` 独立保存在数据库中，不会因停用而变化。
 - 显式卸载：在 Typecho“控制台 → 插件 → FriendLinks 设置”中输入 `DELETE` 后，先删除 Cron，再删除插件表和配置。
 
 MySQL 插件表必须全部使用 InnoDB，以保证检测结果、历史和通知事件的事务一致性。
@@ -480,9 +506,11 @@ TYPECHO_TEST_ROOT=/path/to/typecho php tests/typecho-integration.php
 
 确认已经在“友情链接 → 设置”绑定已发布的普通独立页面，并检查主题是否调用 `$this->content()` 和 `$this->header()`。
 
-### 为什么插件无法启用
+### 为什么自动 Cron 不可用
 
-FriendLinks 必须在启用时自动安装系统 Cron。请检查服务器是否为 Linux、PHP 是否允许 `proc_open`、Web 运行用户是否拥有用户 crontab 权限，以及 PHP CLI 能否加载当前站点的数据库扩展。任一检查失败都会阻止启用，避免插件显示为已启用但实际没有定时检测。
+请检查服务器是否为 Linux、PHP 是否允许 `proc_open`、Web 运行用户是否拥有用户 crontab 权限，以及 PHP CLI 能否加载当前站点的数据库扩展。单纯缺少这些能力不会阻止插件启用，但需要按“手工 CLI Cron”配置，或启用签名 HTTP Worker。
+
+仅禁用 PHP `exec` 不影响 FriendLinks，因为插件不调用 `exec`；禁用 `proc_open` 才会阻止自动安装。宝塔环境只要 PHP Web 用户可读写自己的用户 crontab 即可使用，不要求插件接管宝塔计划任务。多数虚拟主机同时禁止 `proc_open`、系统命令或用户 crontab，因此无法由 PHP 插件创建真实的后台定时任务。
 
 ### 后台点击“立即检测”后状态没有变化
 

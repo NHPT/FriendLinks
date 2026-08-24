@@ -7,9 +7,17 @@ if (!$root || !is_file($root . '/config.inc.php')) {
 }
 
 require $root . '/config.inc.php';
+if ('cli' === PHP_SAPI && !defined('__TYPECHO_ROOT_URL__')) {
+    define('__TYPECHO_ROOT_URL__', 'http://localhost/');
+}
 \Widget\Init::alloc();
 require dirname(__DIR__) . '/Plugin.php';
 require dirname(__DIR__) . '/Action.php';
+
+set_exception_handler(static function (\Throwable $error): void {
+    fwrite(STDERR, $error . PHP_EOL);
+    exit(1);
+});
 
 use Typecho\Db;
 use Typecho\Plugin as TypechoPluginRegistry;
@@ -38,6 +46,26 @@ $check = static function ($condition, string $message) use (&$assertions): void 
         throw new RuntimeException('FAILED: ' . $message);
     }
 };
+$runProcess = static function (array $command, array $environment = []): array {
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+    $env = getenv();
+    $env = is_array($env) ? array_merge($env, $environment) : $environment;
+    $process = proc_open($command, $descriptors, $pipes, null, $env, ['bypass_shell' => true]);
+    if (!is_resource($process)) {
+        throw new RuntimeException('Unable to start test process.');
+    }
+    fclose($pipes[0]);
+    $stdout = (string) stream_get_contents($pipes[1]);
+    $stderr = (string) stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $code = proc_close($process);
+    return ['code' => $code, 'stdout' => $stdout, 'stderr' => $stderr];
+};
 
 $fakeCronState = sys_get_temp_dir() . '/friendlinks-crontab-' . bin2hex(random_bytes(6));
 @unlink($fakeCronState);
@@ -47,6 +75,26 @@ putenv('FRIENDLINKS_FAKE_CRONTAB_STATE=' . $fakeCronState);
 putenv('FRIENDLINKS_FAKE_CRONTAB_REQUIRE_C_LOCALE=1');
 
 $foreignMenuIndex = Helper::addMenu('友情链接');
+Helper::addPanel(
+    $foreignMenuIndex,
+    'OtherLinks/panel/links.php',
+    'Other links',
+    'Other plugin links',
+    'administrator'
+);
+$legacyMenuIndex = Helper::addMenu('友情链接 · FriendLinks');
+Helper::addPanel(
+    $legacyMenuIndex,
+    'FriendLinks/panel/links.php',
+    'Legacy links',
+    'Legacy FriendLinks panel',
+    'administrator'
+);
+$db->query($db->insert('table.options')->rows([
+    'name' => 'friendlinks_menu_index',
+    'user' => 0,
+    'value' => (string) $legacyMenuIndex,
+]));
 Plugin::activate();
 TypechoPluginRegistry::activate('FriendLinks');
 $defaultWorkerSecret = Settings::defaults()['worker_secret'];
@@ -54,6 +102,13 @@ $check('' === $defaultWorkerSecret, 'default settings do not generate a transien
 $check(
     0 === Settings::defaults()['http_worker_enabled'],
     'signed HTTP Worker is disabled by default'
+);
+$check(
+    5 === Settings::defaults()['cron_interval_value']
+        && 'minutes' === Settings::defaults()['cron_interval_unit']
+        && 50 === Settings::defaults()['cli_worker_limit']
+        && 240 === Settings::defaults()['cli_worker_max_seconds'],
+    'CLI Worker uses bounded scheduling defaults'
 );
 Settings::initialize(Settings::defaults());
 $initializedWorkerSecret = (string) Settings::get('worker_secret');
@@ -87,7 +142,7 @@ $check(
         && 1 === substr_count($cronContents, '# BEGIN FriendLinks ')
         && 1 === substr_count($cronContents, '# END FriendLinks ')
         && false !== strpos($cronContents, 'bin/console.php')
-        && false !== strpos($cronContents, '*/5 * * * *'),
+        && false !== strpos($cronContents, '* * * * *'),
     'activation installs exactly one managed FriendLinks Cron block'
 );
 $cronSeedRow = $db->fetchRow($db->select('value')->from('table.options')
@@ -104,10 +159,78 @@ $check(
     $cronPhpRow && PHP_BINARY === $cronPhpRow['value'],
     'activation persists the verified PHP CLI path'
 );
+$cronManager = new SystemCronManager();
 $check(
-    !empty((new SystemCronManager())->inspect()['installed']),
+    !empty($cronManager->inspect()['installed'])
+        && !empty($cronManager->status()['available'])
+        && !empty($cronManager->status()['installed']),
     'Cron inspection confirms the automatically installed task'
 );
+$check(
+    false !== strpos($cronContents, '* * * * *')
+        && false !== strpos($cronContents, 'check --scheduled --due'),
+    'automatic Cron wakes every minute and delegates exact scheduling to the CLI'
+);
+$consolePath = dirname(__DIR__) . '/bin/console.php';
+$consoleHelp = $runProcess([PHP_BINARY, $consolePath, 'help']);
+$check(
+    0 === $consoleHelp['code']
+        && false !== strpos($consoleHelp['stdout'], 'Usage: php bin/console.php')
+        && '' === trim($consoleHelp['stderr']),
+    'standalone CLI help does not require Typecho HTTP request initialization'
+);
+$consoleSelfTest = $runProcess([PHP_BINARY, $consolePath, 'self-test']);
+$check(
+    0 === $consoleSelfTest['code']
+        && 'FriendLinks CLI ready' === trim($consoleSelfTest['stdout'])
+        && false === strpos($consoleSelfTest['stderr'], 'Cookie.php')
+        && false === strpos($consoleSelfTest['stdout'], '<!DOCTYPE html>'),
+    'standalone CLI self-test initializes Typecho without Cookie host warnings or 500 output'
+);
+$restrictedRunner = static function (array $command): array {
+    if ('-l' === ($command[1] ?? null)) {
+        return ['code' => 1, 'stdout' => '', 'stderr' => 'no crontab for www'];
+    }
+    if ('-r' === ($command[1] ?? null)) {
+        return ['code' => 0, 'stdout' => 'cli', 'stderr' => ''];
+    }
+    if ('self-test' === ($command[2] ?? null)) {
+        return ['code' => 0, 'stdout' => "FriendLinks CLI ready\n", 'stderr' => ''];
+    }
+    return ['code' => 127, 'stdout' => '', 'stderr' => 'unexpected command'];
+};
+$restrictedCronManager = new SystemCronManager(
+    null,
+    $restrictedRunner,
+    dirname(__DIR__),
+    '/open-basedir-hidden/crontab',
+    '/open-basedir-hidden/php',
+    'Linux'
+);
+$findCrontabBinary = new ReflectionMethod(SystemCronManager::class, 'findCrontabBinary');
+$findCrontabBinary->setAccessible(true);
+$findPhpCli = new ReflectionMethod(SystemCronManager::class, 'findPhpCli');
+$findPhpCli->setAccessible(true);
+$check(
+    '/open-basedir-hidden/crontab' === $findCrontabBinary->invoke($restrictedCronManager)
+        && '/open-basedir-hidden/php' === $findPhpCli->invoke($restrictedCronManager),
+    'Cron and PHP CLI discovery use execution probes when open_basedir hides binary metadata'
+);
+$invalidCronPathRejected = false;
+try {
+    $invalidCronManager = new SystemCronManager(
+        null,
+        $restrictedRunner,
+        dirname(__DIR__),
+        "relative/\x01crontab",
+        '/open-basedir-hidden/php',
+        'Linux'
+    );
+    $findCrontabBinary->invoke($invalidCronManager);
+} catch (RuntimeException $error) {
+    $invalidCronPathRejected = false !== strpos($error->getMessage(), '路径无效');
+}
+$check($invalidCronPathRejected, 'Cron discovery rejects unsafe command paths before execution');
 $otherCronId = substr(hash('sha256', 'friendlinks-other-instance'), 0, 32);
 $otherCronBlock = "# BEGIN FriendLinks {$otherCronId}\n"
     . "# Managed automatically by FriendLinks. Do not edit this block.\n"
@@ -158,6 +281,19 @@ try {
     $unsupportedCronRejected = false !== strpos($error->getMessage(), '仅支持 Linux');
 }
 $check($unsupportedCronRejected, 'automatic Cron rejects unsupported operating systems');
+$unsupportedCronStatus = (new SystemCronManager(
+    null,
+    null,
+    null,
+    null,
+    null,
+    'Darwin'
+))->status();
+$check(
+    empty($unsupportedCronStatus['available'])
+        && false !== strpos($unsupportedCronStatus['message'], '仅支持 Linux'),
+    'Cron status reports unsupported environments without throwing'
+);
 $validCronContents = $cronContents;
 $malformedCronContents = preg_replace(
     '/^# END FriendLinks [a-f0-9]{32}\n?/m',
@@ -187,7 +323,7 @@ $runner = static function (array $command, string $input) use (&$memoryCron, &$c
     }
     if ('-' === $argument) {
         $memoryCron = $corruptNextWrite
-            ? str_replace('check --due', 'check --corrupted', $input)
+            ? str_replace('check --scheduled --due', 'check --corrupted --due', $input)
                 . "# task added during verification\n30 3 * * * /bin/true\n"
             : $input;
         $corruptNextWrite = false;
@@ -195,6 +331,9 @@ $runner = static function (array $command, string $input) use (&$memoryCron, &$c
     }
     if ('-r' === $argument) {
         return ['code' => 0, 'stdout' => 'cli', 'stderr' => ''];
+    }
+    if ('self-test' === ($command[2] ?? null)) {
+        return ['code' => 0, 'stdout' => "FriendLinks CLI ready\n", 'stderr' => ''];
     }
     return ['code' => 0, 'stdout' => "Usage\n", 'stderr' => ''];
 };
@@ -234,6 +373,9 @@ $cloneRunner = static function (array $command, string $input) use (&$cloneCron)
     if ('-r' === $argument) {
         return ['code' => 0, 'stdout' => 'cli', 'stderr' => ''];
     }
+    if ('self-test' === ($command[2] ?? null)) {
+        return ['code' => 0, 'stdout' => "FriendLinks CLI ready\n", 'stderr' => ''];
+    }
     return ['code' => 0, 'stdout' => "Usage\n", 'stderr' => ''];
 };
 $cloneInstall = (new SystemCronManager(
@@ -265,6 +407,9 @@ $failedInstallRunner = static function (array $command): array {
     }
     if ('-r' === $argument) {
         return ['code' => 0, 'stdout' => 'cli', 'stderr' => ''];
+    }
+    if ('self-test' === ($command[2] ?? null)) {
+        return ['code' => 0, 'stdout' => "FriendLinks CLI ready\n", 'stderr' => ''];
     }
     return ['code' => 0, 'stdout' => "Usage\n", 'stderr' => ''];
 };
@@ -336,13 +481,27 @@ $categoriesPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/categor
 $healthPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/health.php');
 $settingsPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/settings.php');
 $adminScript = (string) file_get_contents(dirname(__DIR__) . '/assets/admin.js');
+$adminStyles = (string) file_get_contents(dirname(__DIR__) . '/assets/admin.css');
 $actionSource = (string) file_get_contents(dirname(__DIR__) . '/Action.php');
 $pluginSource = (string) file_get_contents(dirname(__DIR__) . '/Plugin.php');
+$consoleSource = (string) file_get_contents(dirname(__DIR__) . '/bin/console.php');
+$settingsSource = (string) file_get_contents(dirname(__DIR__) . '/src/Application/Settings.php');
+$repositoriesSource = (string) file_get_contents(
+    dirname(__DIR__) . '/src/Infrastructure/Repositories.php'
+);
+$cronSource = (string) file_get_contents(
+    dirname(__DIR__) . '/src/Infrastructure/SystemCronManager.php'
+);
 $saveLinkSource = preg_match(
     '/private function saveLink\\(\\): void(.*?)private function archiveLinks\\(\\): void/s',
     $actionSource,
     $saveLinkMatch
 ) ? $saveLinkMatch[1] : '';
+$saveSettingsSource = preg_match(
+    '/private function saveSettings\\(\\): void(.*?)private function saveNotifications\\(\\): void/s',
+    $actionSource,
+    $saveSettingsMatch
+) ? $saveSettingsMatch[1] : '';
 $check(
     false === strpos($linkEditPanel, '最近状态')
         && false === strpos($linkEditPanel, "json_decode(\$link['details_json']")
@@ -378,6 +537,7 @@ $check(
 $check(
     false !== strpos($settingsPanel, 'data-flm-settings-tab="display"')
         && false !== strpos($settingsPanel, 'data-flm-settings-tab="detection"')
+        && false !== strpos($settingsPanel, 'data-flm-settings-tab="cli-worker"')
         && false !== strpos($settingsPanel, 'data-flm-settings-tab="worker"')
         && false !== strpos($settingsPanel, '<div class="col-mb-12">')
         && false === strpos($settingsPanel, 'col-tb-offset'),
@@ -402,11 +562,58 @@ $check(
     'signed HTTP Worker requires explicit administrator enablement'
 );
 $check(
-    false !== strpos($healthPanel, 'SystemCronManager')
-        && false !== strpos($healthPanel, '自动定时任务')
+    false === strpos($healthPanel, 'SystemCronManager')
+        && false === strpos($healthPanel, '自动定时任务')
         && false === strpos($healthPanel, '手动配置')
         && false === strpos($healthPanel, 'flm-code'),
-    'health page reports automatic Cron state without manual setup instructions'
+    'health page contains no Cron management section'
+);
+$check(
+    false !== strpos($settingsPanel, 'name="cron_interval_value"')
+        && false !== strpos($settingsPanel, 'name="cron_interval_unit"')
+        && false !== strpos($settingsPanel, 'name="cli_worker_limit"')
+        && false !== strpos($settingsPanel, 'name="cli_worker_max_seconds"')
+        && false !== strpos($settingsPanel, 'data-min=')
+        && false !== strpos($settingsPanel, 'data-max=')
+        && false !== strpos($settingsSource, "'seconds'")
+        && false !== strpos($settingsSource, "'weeks'")
+        && false !== strpos($settingsSource, "'months'")
+        && false !== strpos($settingsPanel, "\$cronStatus['available']")
+        && false !== strpos($settingsPanel, "latestRunByMode('cli')")
+        && false !== strpos($cronSource, 'check --scheduled --due')
+        && false !== strpos($consoleSource, 'Settings::cronIntervalSeconds')
+        && false !== strpos($consoleSource, 'claimCliSchedule')
+        && false !== strpos($repositoriesSource, "latestRunByMode('cli', true)")
+        && false !== strpos($consoleSource, "\$settings['cli_worker_limit']")
+        && false !== strpos($consoleSource, "\$settings['cli_worker_max_seconds']"),
+    'CLI Worker exposes bounded scheduling controls and reports automatic task status'
+);
+$check(
+    false !== strpos($settingsPanel, 'class="flm-error" role="alert"')
+        && false !== strpos($settingsPanel, '手工部署 CLI Cron')
+        && false !== strpos($settingsPanel, 'data-flm-cron-unavailable=')
+        && false !== strpos($settingsPanel, 'data-flm-settings-save')
+        && false !== strpos($adminScript, "cronUnavailable && id === 'cli-worker'")
+        && false !== strpos($adminStyles, '.flm-admin .flm-error')
+        && false !== strpos($adminStyles, 'color: var(--flm-admin-bad)')
+        && substr_count($settingsPanel, "\$cronDisabled ? ' disabled' : ''") >= 4,
+    'unavailable automatic Cron shows a critical fallback notice and disables CLI-only controls'
+);
+$cronStatusPosition = strpos($saveSettingsSource, '$cronStatus = $cron->status();');
+$cronGuardPosition = strpos($saveSettingsSource, "if (!empty(\$cronStatus['available']))");
+$cronInputPosition = strpos($saveSettingsSource, "'cron_interval_value' =>");
+$check(
+    false !== $cronStatusPosition
+        && false !== $cronGuardPosition
+        && false !== $cronInputPosition
+        && $cronStatusPosition < $cronGuardPosition
+        && $cronGuardPosition < $cronInputPosition,
+    'server ignores submitted CLI scheduling values while automatic Cron is unavailable'
+);
+$check(
+    false !== strpos($actionSource, 'FriendLinksPlugin::uninstall()')
+        && false === strpos($actionSource, "Helper::removePlugin('FriendLinks')"),
+    'explicit uninstall uses the plugin-owned lifecycle path without swallowed deactivation errors'
 );
 $check(
     false === strpos($pluginSource, 'panelTable')
@@ -425,10 +632,26 @@ foreach (['categories', 'links', 'current_status', 'check_history', 'runs', 'cac
 $panelRow = Db::get()->fetchRow(Db::get()->select('value')->from('table.options')
     ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
 $panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
+$allMenusHaveChildren = true;
+foreach ($panelTable['parent'] ?? [] as $key => $name) {
+    if (!isset($panelTable['child'][10 + $key]) || !is_array($panelTable['child'][10 + $key])) {
+        $allMenusHaveChildren = false;
+        break;
+    }
+}
+$check(
+    $allMenusHaveChildren,
+    'test fixture keeps every extension menu compatible with Typecho Widget Menu iteration'
+);
 $friendMenus = array_filter($panelTable['parent'], static function ($name) {
-    return '友情链接 · FriendLinks' === $name;
+    return '友情链接 ' === $name;
 });
-$check(1 === count($friendMenus), 'repeated activation keeps one FriendLinks admin menu');
+$check(
+    1 === count($friendMenus)
+        && '友情链接' === trim((string) reset($friendMenus))
+        && !in_array('友情链接 · FriendLinks', $panelTable['parent'] ?? [], true),
+    'repeated activation keeps one visually concise FriendLinks admin menu'
+);
 $foreignMenus = array_filter($panelTable['parent'], static function ($name) {
     return '友情链接' === $name;
 });
@@ -443,6 +666,12 @@ $menuIndexRow = $db->fetchRow($db->select('value')->from('table.options')
 $check(
     $menuIndexRow && isset($panelTable['child'][(int) $menuIndexRow['value']]),
     'activation persists the FriendLinks menu index'
+);
+$menuNameRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_menu_name')->where('user = ?', 0)->limit(1));
+$check(
+    $menuNameRow && '友情链接 ' === $menuNameRow['value'],
+    'activation persists the exact internal menu removal key'
 );
 foreach ($panelTable['child'] as $items) {
     foreach ($items as $item) {
@@ -477,6 +706,77 @@ $settings['page_cid'] = $pageId;
 Settings::save($settings);
 Settings::assertPage($pageId);
 $check((int) Settings::get('page_cid') === $pageId, 'page binding persisted');
+$cliSettings = Settings::sanitize([
+    'cron_interval_value' => 3,
+    'cron_interval_unit' => 'hours',
+    'cli_worker_limit' => 75,
+    'cli_worker_max_seconds' => 180,
+]);
+$check(
+    10800 === Settings::cronIntervalSeconds($cliSettings)
+        && 75 === $cliSettings['cli_worker_limit']
+        && 180 === $cliSettings['cli_worker_max_seconds'],
+    'CLI Worker settings accept bounded scheduling and processing values'
+);
+$settingsBeforeAvailablePost = Settings::all();
+$originalPost = $_POST;
+$_POST = $settingsBeforeAvailablePost;
+$_POST['cron_interval_value'] = 1;
+$_POST['cron_interval_unit'] = 'days';
+$_POST['cli_worker_limit'] = 77;
+$_POST['cli_worker_max_seconds'] = 180;
+\Typecho\Cookie::setPrefix('http://localhost/');
+$saveSettings = new ReflectionMethod(\FriendLinks_Action::class, 'saveSettings');
+$saveSettings->setAccessible(true);
+$saveSettings->invoke(\FriendLinks_Action::alloc());
+$_POST = $originalPost;
+$settingsAfterAvailablePost = Settings::all();
+$check(
+    1 === (int) $settingsAfterAvailablePost['cron_interval_value']
+        && 'days' === $settingsAfterAvailablePost['cron_interval_unit']
+        && 86400 === Settings::cronIntervalSeconds($settingsAfterAvailablePost)
+        && 77 === (int) $settingsAfterAvailablePost['cli_worker_limit']
+        && 180 === (int) $settingsAfterAvailablePost['cli_worker_max_seconds'],
+    'available automatic Cron saves CLI scheduling values through the settings action'
+);
+$coexistingWorkers = Settings::sanitize([
+    'cron_interval_value' => 2,
+    'cron_interval_unit' => 'days',
+    'cli_worker_limit' => 25,
+    'cli_worker_max_seconds' => 120,
+    'http_worker_enabled' => 1,
+]);
+$check(
+    172800 === Settings::cronIntervalSeconds($coexistingWorkers)
+        && 1 === $coexistingWorkers['http_worker_enabled'],
+    'CLI and HTTP Worker settings can be enabled together'
+);
+$extendedCliSettings = Settings::sanitize([
+    'cron_interval_value' => 2,
+    'cron_interval_unit' => 'weeks',
+]);
+$check(
+    120 === Settings::cronIntervalSeconds([
+        'cron_interval_value' => 120,
+        'cron_interval_unit' => 'seconds',
+    ])
+        && 1209600 === Settings::cronIntervalSeconds($extendedCliSettings)
+        && 2592000 === Settings::cronIntervalSeconds([
+            'cron_interval_value' => 1,
+            'cron_interval_unit' => 'months',
+        ]),
+    'CLI Worker settings support seconds, weeks, and 30-day month intervals'
+);
+$invalidCliSettingsRejected = false;
+try {
+    Settings::sanitize([
+        'cron_interval_value' => 59,
+        'cron_interval_unit' => 'seconds',
+    ]);
+} catch (InvalidArgumentException $error) {
+    $invalidCliSettingsRejected = true;
+}
+$check($invalidCliSettingsRejected, 'CLI Worker settings reject sub-minute scheduling intervals');
 $rotatedWorkerSecret = str_repeat('a', 64);
 Settings::rotateWorkerSecret($rotatedWorkerSecret);
 $check(
@@ -1173,13 +1473,41 @@ try {
     );
 }
 $failedRun = $repositories->latestRuns(1)[0] ?? null;
+$latestCliRun = $repositories->latestRunByMode('cli');
 $check(
     0 === $workerFailureResult['completed']
         && $workerFailureResult['failed'] >= 1
         && $failedRun
+        && $latestCliRun
+        && $latestCliRun['run_id'] === $failedRun['run_id']
         && 'failed' === $failedRun['status']
         && (int) $failedRun['failed_count'] >= 1,
     'worker top-level database failures propagate to result counters and run status'
+);
+$scheduleClaimNow = time() + 7200;
+$firstScheduleClaim = $repositories->claimCliSchedule($scheduleClaimNow, 300, 240);
+$secondScheduleClaim = $repositories->claimCliSchedule($scheduleClaimNow, 300, 240);
+$check(
+    !empty($firstScheduleClaim['due'])
+        && 1 === preg_match('/^[a-f0-9]{32}$/', (string) $firstScheduleClaim['run_id'])
+        && empty($secondScheduleClaim['due'])
+        && 'worker_running' === $secondScheduleClaim['reason'],
+    'scheduled CLI claim atomically creates one running record before Worker startup'
+);
+$scheduledWorkerResult = (new Worker($repositories))->run(
+    'cli',
+    1,
+    1,
+    [PHP_INT_MAX],
+    $firstScheduleClaim['run_id']
+);
+$scheduledRun = $repositories->latestRunByMode('cli', true);
+$check(
+    $scheduledRun
+        && $firstScheduleClaim['run_id'] === $scheduledWorkerResult['run_id']
+        && $firstScheduleClaim['run_id'] === $scheduledRun['run_id']
+        && 'completed' === $scheduledRun['status'],
+    'scheduled Worker completes the pre-created run without inserting a duplicate'
 );
 
 if (getenv('KEEP_TYPECHO_FIXTURE')) {
@@ -1198,9 +1526,11 @@ Settings::save($settings);
 
 putenv('FRIENDLINKS_FAKE_CRONTAB_FAIL_WRITE=1');
 $failedDeactivationRejected = false;
+$failedDeactivationMessage = '';
 try {
     Plugin::deactivate();
 } catch (\Typecho\Plugin\Exception $error) {
+    $failedDeactivationMessage = $error->getMessage();
     $failedDeactivationRejected = false !== strpos($error->getMessage(), '无法写入当前用户 crontab');
 }
 putenv('FRIENDLINKS_FAKE_CRONTAB_FAIL_WRITE');
@@ -1209,7 +1539,7 @@ $panelRow = $db->fetchRow($db->select('value')->from('table.options')
 $panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
 $check(
     $failedDeactivationRejected
-        && in_array('友情链接 · FriendLinks', $panelTable['parent'] ?? [], true)
+        && in_array('友情链接 ', $panelTable['parent'] ?? [], true)
         && false !== strpos(
             (string) file_get_contents($fakeCronState),
             '# BEGIN FriendLinks ' . $ownCronId
@@ -1225,11 +1555,20 @@ $check(
         && false !== strpos($cronContents, "# unrelated task\n0 0 * * * /bin/true"),
     'deactivation removes only this instance Cron block'
 );
+$cronMetadataAfterDeactivate = $db->fetchRow($db->select('value')->from('table.options')
+    ->where(
+        'name = ? OR name = ? OR name = ?',
+        'friendlinks_cron_id',
+        'friendlinks_cron_owner',
+        'friendlinks_cron_php'
+    )
+    ->where('user = ?', 0)->limit(1));
+$check(!$cronMetadataAfterDeactivate, 'deactivation removes automatic Cron metadata');
 $panelRow = $db->fetchRow($db->select('value')->from('table.options')
     ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
 $panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
 $check(
-    !in_array('友情链接 · FriendLinks', $panelTable['parent'] ?? [], true),
+    !in_array('友情链接 ', $panelTable['parent'] ?? [], true),
     'deactivation removes the registered FriendLinks menu'
 );
 $check(
@@ -1254,10 +1593,26 @@ $check(
 $menuIndexRow = $db->fetchRow($db->select('value')->from('table.options')
     ->where('name = ?', 'friendlinks_menu_index')->where('user = ?', 0)->limit(1));
 $check(!$menuIndexRow, 'deactivation removes the stored FriendLinks menu index');
+$menuNameRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_menu_name')->where('user = ?', 0)->limit(1));
+$check(!$menuNameRow, 'deactivation removes the stored FriendLinks menu key');
 
 $db->query($db->delete('table.options')->where('name = ?', 'plugin:FriendLinks'));
 Plugin::activate();
 Plugin::configHandle(Settings::defaults(), true);
+$reactivatedCronContents = (string) file_get_contents($fakeCronState);
+$reactivatedCronId = '';
+preg_match_all(
+    '/^# BEGIN FriendLinks ([a-f0-9]{32})$/m',
+    $reactivatedCronContents,
+    $reactivatedCronMatch
+);
+foreach ($reactivatedCronMatch[1] ?? [] as $candidateCronId) {
+    if ($candidateCronId !== $otherCronId) {
+        $reactivatedCronId = $candidateCronId;
+        break;
+    }
+}
 $check(
     !empty((new SystemCronManager())->inspect()['installed']),
     'reactivation automatically restores the managed Cron task'
@@ -1270,35 +1625,72 @@ $check(
 
 Plugin::deactivate();
 $check(
-    false === strpos(
+    '' !== $reactivatedCronId
+        && false === strpos(
         (string) file_get_contents($fakeCronState),
-        '# BEGIN FriendLinks ' . $ownCronId
-    ),
+        '# BEGIN FriendLinks ' . $reactivatedCronId
+        ),
     'final deactivation removes the restored Cron task'
 );
 putenv('FRIENDLINKS_FAKE_CRONTAB_FAIL_WRITE=1');
-$failedActivationRejected = false;
-try {
-    Plugin::activate();
-} catch (\Typecho\Plugin\Exception $error) {
-    $failedActivationRejected = false !== strpos($error->getMessage(), '无法写入当前用户 crontab');
-}
+$manualActivationMessage = Plugin::activate();
 putenv('FRIENDLINKS_FAKE_CRONTAB_FAIL_WRITE');
 $panelRow = $db->fetchRow($db->select('value')->from('table.options')
     ->where('name = ?', 'panelTable')->where('user = ?', 0)->limit(1));
 $panelTable = unserialize((string) $panelRow['value'], ['allowed_classes' => false]);
+$manualCronMetadata = $db->fetchRow($db->select('value')->from('table.options')
+    ->where(
+        'name = ? OR name = ? OR name = ?',
+        'friendlinks_cron_id',
+        'friendlinks_cron_owner',
+        'friendlinks_cron_php'
+    )
+    ->where('user = ?', 0)->limit(1));
+$manualCronError = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_cron_error')->where('user = ?', 0)->limit(1));
+$manualCronStatus = (new SystemCronManager())->status();
 $check(
-    $failedActivationRejected
-        && !in_array('友情链接 · FriendLinks', $panelTable['parent'] ?? [], true)
-        && false === strpos(
-            (string) file_get_contents($fakeCronState),
-            '# BEGIN FriendLinks ' . $ownCronId
-        )
+    false !== strpos($manualActivationMessage, '请按 README 手工配置')
+        && in_array('友情链接 ', $panelTable['parent'] ?? [], true)
+        && !$manualCronMetadata
+        && $manualCronError
+        && empty($manualCronStatus['available'])
         && false !== strpos(
             (string) file_get_contents($fakeCronState),
             '# BEGIN FriendLinks ' . $otherCronId
         ),
-    'Cron installation failure rejects activation and rolls back admin registration'
+    'an unavailable automatic Cron falls back to manual scheduling without stale metadata'
+);
+$settingsBeforeUnavailablePost = Settings::all();
+$originalPost = $_POST;
+$_POST = $settingsBeforeUnavailablePost;
+$_POST['cron_interval_value'] = 2;
+$_POST['cron_interval_unit'] = 'days';
+$_POST['cli_worker_limit'] = 1;
+$_POST['cli_worker_max_seconds'] = 30;
+\Typecho\Cookie::setPrefix('http://localhost/');
+$saveSettings = new ReflectionMethod(\FriendLinks_Action::class, 'saveSettings');
+$saveSettings->setAccessible(true);
+$saveSettings->invoke(\FriendLinks_Action::alloc());
+$_POST = $originalPost;
+$settingsAfterUnavailablePost = Settings::all();
+$check(
+    $settingsBeforeUnavailablePost['cron_interval_value']
+        === $settingsAfterUnavailablePost['cron_interval_value']
+        && $settingsBeforeUnavailablePost['cron_interval_unit']
+        === $settingsAfterUnavailablePost['cron_interval_unit']
+        && $settingsBeforeUnavailablePost['cli_worker_limit']
+        === $settingsAfterUnavailablePost['cli_worker_limit']
+        && $settingsBeforeUnavailablePost['cli_worker_max_seconds']
+        === $settingsAfterUnavailablePost['cli_worker_max_seconds'],
+    'server ignores forged CLI scheduling values while automatic Cron is unavailable'
+);
+Plugin::uninstall();
+$manualCronError = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_cron_error')->where('user = ?', 0)->limit(1));
+$check(
+    !$manualCronError && !TypechoPluginRegistry::exists('FriendLinks'),
+    'explicit uninstall clears fallback state and persists the disabled plugin registry'
 );
 $migration->uninstall();
 foreach (['categories', 'links', 'current_status', 'check_history', 'runs', 'cache', 'notification_outbox'] as $table) {
@@ -1322,6 +1714,10 @@ $check(!$cronOwnerRow, 'uninstall removes the Cron system user identifier');
 $cronPhpRow = $db->fetchRow($db->select('value')->from('table.options')
     ->where('name = ?', 'friendlinks_cron_php')->where('user = ?', 0)->limit(1));
 $check(!$cronPhpRow, 'uninstall removes the Cron PHP CLI path');
+$pluginConfigRow = $db->fetchRow($db->select('value')->from('table.options')
+    ->where('name = ?', 'plugin:FriendLinks')->where('user = ?', 0)->limit(1));
+$check(!$pluginConfigRow, 'uninstall removes the serialized plugin configuration');
+Helper::removePanel($foreignMenuIndex, 'OtherLinks/panel/links.php');
 Helper::removeMenu('友情链接');
 @unlink($fakeCronState);
 putenv('FRIENDLINKS_CRONTAB_BINARY');

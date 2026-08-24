@@ -591,6 +591,14 @@
   padding: 8px 12px;
 }
 
+.flm-admin .flm-error {
+  background: #fff5f5;
+  border-left: 3px solid var(--flm-admin-bad);
+  color: var(--flm-admin-bad);
+  margin: 14px 0;
+  padding: 8px 12px;
+}
+
 .flm-admin .flm-danger-zone {
   border-top: 1px solid var(--flm-admin-border);
   margin-top: 32px;

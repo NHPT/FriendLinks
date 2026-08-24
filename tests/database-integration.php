@@ -19,6 +19,11 @@ require $typechoRoot . '/var/Typecho/Common.php';
 \Typecho\Common::init();
 require dirname(__DIR__) . '/vendor/autoload.php';
 
+set_exception_handler(static function (\Throwable $error): void {
+    fwrite(STDERR, $error . PHP_EOL);
+    exit(1);
+});
+
 use Typecho\Db;
 use TypechoPlugin\FriendLinks\Infrastructure\Database;
 use TypechoPlugin\FriendLinks\Infrastructure\MigrationManager;
@@ -50,7 +55,6 @@ if ('mysql' === $database->driver()) {
         . 'PRIMARY KEY ("name", "user"))'
     );
 }
-
 $migration = new MigrationManager($database);
 $migration->uninstall();
 $migration->migrate();
@@ -142,6 +146,24 @@ $check(
         && 'archived' === $repositories->link($linkId, true)['visibility'],
     'archive updates link and status in one operation'
 );
+$runId = bin2hex(random_bytes(16));
+$repositories->createRun($runId, 'cli', $now);
+$latestCliRun = $repositories->latestRunByMode('cli');
+$check(
+    $latestCliRun && $runId === $latestCliRun['run_id'],
+    'latest CLI run lookup filters by Worker mode'
+);
+$scheduleClaimNow = $now + 7200;
+$firstScheduleClaim = $repositories->claimCliSchedule($scheduleClaimNow, 300, 240);
+$secondScheduleClaim = $repositories->claimCliSchedule($scheduleClaimNow, 300, 240);
+$check(
+    !empty($firstScheduleClaim['due'])
+        && empty($secondScheduleClaim['due'])
+        && 'worker_running' === $secondScheduleClaim['reason'],
+    'scheduled CLI claim serializes due checks and running-run creation'
+);
+$db->query($db->delete('table.flm_runs')
+    ->where('run_id = ?', $firstScheduleClaim['run_id']));
 $repositories->enqueueNotifications([[
     'event_key' => hash('sha256', 'database-integration-notification'),
     'link_id' => $disabledId,
@@ -194,14 +216,29 @@ $db->query($db->insert('table.options')->rows([
     'user' => 0,
     'value' => '/usr/bin/php',
 ]));
+$db->query($db->insert('table.options')->rows([
+    'name' => 'friendlinks_menu_name',
+    'user' => 0,
+    'value' => '友情链接 ',
+]));
+$db->query($db->insert('table.options')->rows([
+    'name' => 'friendlinks_cron_error',
+    'user' => 0,
+    'value' => 'automatic Cron unavailable',
+]));
 $migration->uninstall();
 $cronOption = $database->fetchRowWrite($db->select('value')->from('table.options')
     ->where(
-        'name = ? OR name = ? OR name = ?',
+        'name = ? OR name = ? OR name = ? OR name = ?',
         'friendlinks_cron_id',
         'friendlinks_cron_owner',
-        'friendlinks_cron_php'
+        'friendlinks_cron_php',
+        'friendlinks_cron_error'
     )
     ->where('user = ?', 0)->limit(1));
-$check(!$cronOption, 'uninstall removes Cron instance, system user and PHP CLI identifiers');
+$check(!$cronOption, 'uninstall removes all automatic Cron metadata');
+$menuNameOption = $database->fetchRowWrite($db->select('value')->from('table.options')
+    ->where('name = ?', 'friendlinks_menu_name')
+    ->where('user = ?', 0)->limit(1));
+$check(!$menuNameOption, 'uninstall removes the internal menu removal key');
 fwrite(STDOUT, "OK: {$assertions} {$database->driver()} database assertions\n");

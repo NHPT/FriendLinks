@@ -151,6 +151,8 @@
   function initializeSettingsTabs(form) {
     var buttons = form.querySelectorAll('[data-flm-settings-tab]');
     var panels = form.querySelectorAll('[data-flm-settings-panel]');
+    var saveButton = form.querySelector('[data-flm-settings-save]');
+    var cronUnavailable = form.getAttribute('data-flm-cron-unavailable') === '1';
     if (!buttons.length || !panels.length) {
       return;
     }
@@ -164,6 +166,11 @@
       Array.prototype.forEach.call(panels, function (panel) {
         panel.hidden = panel.getAttribute('data-flm-settings-panel') !== id;
       });
+      if (saveButton) {
+        var saveDisabled = cronUnavailable && id === 'cli-worker';
+        saveButton.disabled = saveDisabled;
+        saveButton.setAttribute('aria-disabled', saveDisabled ? 'true' : 'false');
+      }
       if (updateHash && window.history && window.history.replaceState) {
         window.history.replaceState(null, '', '#settings-' + id);
       }
@@ -175,7 +182,7 @@
       });
     });
 
-    var allowed = ['display', 'detection', 'worker'];
+    var allowed = ['display', 'detection', 'cli-worker', 'worker'];
     var requested = window.location.hash.indexOf('#settings-') === 0
       ? window.location.hash.substring(10)
       : 'display';
@@ -183,6 +190,18 @@
       requested = 'display';
     }
     activate(requested, false);
+
+    var interval = form.querySelector('#flm-cron-interval-value');
+    var unit = form.querySelector('#flm-cron-interval-unit');
+    if (interval && unit) {
+      var updateIntervalLimit = function () {
+        var selected = unit.options[unit.selectedIndex];
+        interval.min = selected ? (selected.getAttribute('data-min') || '1') : '1';
+        interval.max = selected ? (selected.getAttribute('data-max') || '1440') : '1440';
+      };
+      unit.addEventListener('change', updateIntervalLimit);
+      updateIntervalLimit();
+    }
   }
 
   function initializeConfirmDialog(dialog) {

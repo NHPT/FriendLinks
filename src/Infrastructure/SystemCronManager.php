@@ -9,8 +9,9 @@ final class SystemCronManager
     private const CRON_ID_OPTION = 'friendlinks_cron_id';
     private const CRON_OWNER_OPTION = 'friendlinks_cron_owner';
     private const CRON_PHP_OPTION = 'friendlinks_cron_php';
+    private const CRON_ERROR_OPTION = 'friendlinks_cron_error';
     private const MAX_CRONTAB_BYTES = 1048576;
-    private const SCHEDULE = '*/5 * * * *';
+    private const SCHEDULE = '* * * * *';
 
     /** @var Database */
     private $database;
@@ -51,13 +52,102 @@ final class SystemCronManager
 
     public function install(): array
     {
+        return $this->withLifecycleLock(function () {
+            try {
+                return $this->installLocked();
+            } catch (CronUnavailableException $error) {
+                $this->recordUnavailableLocked($error->getMessage());
+                throw $error;
+            }
+        });
+    }
+
+    public function remove(): void
+    {
+        $this->withLifecycleLock(function () {
+            $cronId = $this->storedCronId(true);
+            if (null === $cronId) {
+                return null;
+            }
+
+            $this->assertSupported();
+            $this->assertOwner(false);
+            $crontab = $this->findCrontabBinary();
+            $this->withCrontabLock($crontab, function () use ($cronId, $crontab) {
+                $current = $this->readCrontab($crontab);
+                $updated = $this->normalizeCrontab($this->stripBlock($current, $cronId));
+                if ($updated !== $this->normalizeCrontab($current)) {
+                    $this->replaceAndVerify($crontab, $current, $updated, $cronId, false);
+                }
+                return null;
+            });
+            return null;
+        });
+    }
+
+    public function removeAndClear(): void
+    {
+        $this->withLifecycleLock(function () {
+            $cronId = $this->storedCronId(true);
+            if (null === $cronId) {
+                $this->clearMetadata();
+                return null;
+            }
+
+            $this->assertSupported();
+            $this->assertOwner(false);
+            $crontab = $this->findCrontabBinary();
+            $this->withCrontabLock($crontab, function () use ($cronId, $crontab) {
+                $metadata = $this->metadataSnapshot();
+                $current = $this->readCrontab($crontab);
+                $updated = $this->normalizeCrontab($this->stripBlock($current, $cronId));
+                $removed = false;
+                try {
+                    if ($updated !== $this->normalizeCrontab($current)) {
+                        $this->replaceAndVerify($crontab, $current, $updated, $cronId, false);
+                        $removed = true;
+                    }
+                    $this->clearMetadata();
+                } catch (\Throwable $error) {
+                    $rollbackErrors = [];
+                    if ($removed) {
+                        try {
+                            $this->replaceAndVerify($crontab, $updated, $current, $cronId, true);
+                        } catch (\Throwable $rollback) {
+                            $rollbackErrors[] = $rollback->getMessage();
+                        }
+                    }
+                    try {
+                        $this->restoreMetadata($metadata);
+                    } catch (\Throwable $rollback) {
+                        $rollbackErrors[] = $rollback->getMessage();
+                    }
+                    if ($rollbackErrors) {
+                        throw new \RuntimeException(
+                            $error->getMessage() . '；Cron 停用回滚失败：' . implode('；', $rollbackErrors),
+                            0,
+                            $error
+                        );
+                    }
+                    throw $error;
+                }
+                return null;
+            });
+            return null;
+        });
+    }
+
+    private function installLocked(): array
+    {
         $this->assertSupported();
         $crontab = $this->findCrontabBinary();
         $php = $this->findPhpCli();
         $this->writeStateUncertain = false;
         return $this->withCrontabLock($crontab, function () use ($crontab, $php) {
-            $ownerCreated = $this->assertOwner(true);
+            $metadata = $this->metadataSnapshot();
             try {
+                $this->clearUnavailable();
+                $this->assertOwner(true);
                 $cronId = $this->loadOrCreateCronId();
                 $this->persistPhpCli($php);
                 $current = $this->readCrontab($crontab);
@@ -68,19 +158,18 @@ final class SystemCronManager
                 } elseif (!$this->containsExpectedBlock($current, $cronId, $php)) {
                     throw new \RuntimeException('FriendLinks 自动 Cron 校验失败。');
                 }
-
                 return [
                     'installed' => true,
                     'cron_id' => $cronId,
                     'schedule' => self::SCHEDULE,
                 ];
             } catch (\Throwable $error) {
-                if ($ownerCreated && !$this->writeStateUncertain) {
+                if (!$this->writeStateUncertain && $metadata !== $this->metadataSnapshot()) {
                     try {
-                        $this->releaseOwner();
+                        $this->restoreMetadata($metadata);
                     } catch (\Throwable $rollback) {
                         throw new \RuntimeException(
-                            $error->getMessage() . '；Cron 安装用户回滚失败：' . $rollback->getMessage(),
+                            $error->getMessage() . '；Cron 元数据回滚失败：' . $rollback->getMessage(),
                             0,
                             $error
                         );
@@ -91,66 +180,161 @@ final class SystemCronManager
         });
     }
 
-    public function remove(): void
+    public function inspect(): array
     {
-        $cronId = $this->storedCronId(true);
-        if (null === $cronId) {
-            return;
-        }
-
-        $this->assertSupported();
-        $this->assertOwner(false);
-        $crontab = $this->findCrontabBinary();
-        $this->withCrontabLock($crontab, function () use ($cronId, $crontab) {
-            $current = $this->readCrontab($crontab);
-            $updated = $this->normalizeCrontab($this->stripBlock($current, $cronId));
-            if ($updated !== $this->normalizeCrontab($current)) {
-                $this->replaceAndVerify($crontab, $current, $updated, $cronId, false);
+        return $this->withLifecycleLock(function () {
+            $cronId = $this->storedCronId(true);
+            if (null === $cronId) {
+                return ['installed' => false, 'schedule' => self::SCHEDULE];
             }
-            return null;
+
+            $this->assertSupported();
+            $this->assertOwner(false);
+            $crontab = $this->findCrontabBinary();
+            $php = $this->storedPhpCli();
+            return $this->withCrontabLock($crontab, function () use ($cronId, $crontab, $php) {
+                $current = $this->readCrontab($crontab);
+                return [
+                    'installed' => $this->containsExpectedBlock($current, $cronId, $php),
+                    'schedule' => self::SCHEDULE,
+                ];
+            });
         });
     }
 
-    public function inspect(): array
+    public function status(): array
     {
-        $cronId = $this->storedCronId(true);
-        if (null === $cronId) {
-            return ['installed' => false, 'schedule' => self::SCHEDULE];
-        }
+        try {
+            return $this->withLifecycleLock(function () {
+                $unavailable = $this->storedUnavailable();
+                if (null !== $unavailable) {
+                    return [
+                        'available' => false,
+                        'installed' => false,
+                        'schedule' => self::SCHEDULE,
+                        'message' => $unavailable,
+                    ];
+                }
+                $this->assertSupported();
+                $crontab = $this->findCrontabBinary();
+                $cronId = $this->storedCronId(true);
+                if (null === $cronId) {
+                    $this->findPhpCli();
+                    $this->readCrontab($crontab);
+                    return [
+                        'available' => true,
+                        'installed' => false,
+                        'schedule' => self::SCHEDULE,
+                        'message' => null,
+                    ];
+                }
 
-        $this->assertSupported();
-        $this->assertOwner(false);
-        $crontab = $this->findCrontabBinary();
-        $php = $this->storedPhpCli();
-        return $this->withCrontabLock($crontab, function () use ($cronId, $crontab, $php) {
-            $current = $this->readCrontab($crontab);
+                $this->assertOwner(false);
+                $php = $this->storedPhpCli();
+                $installed = $this->withCrontabLock(
+                    $crontab,
+                    function () use ($cronId, $crontab, $php) {
+                        return $this->containsExpectedBlock(
+                            $this->readCrontab($crontab),
+                            $cronId,
+                            $php
+                        );
+                    }
+                );
+                return [
+                    'available' => true,
+                    'installed' => $installed,
+                    'schedule' => self::SCHEDULE,
+                    'message' => null,
+                ];
+            });
+        } catch (\Throwable $error) {
             return [
-                'installed' => $this->containsExpectedBlock($current, $cronId, $php),
+                'available' => false,
+                'installed' => false,
                 'schedule' => self::SCHEDULE,
+                'message' => $error->getMessage(),
             ];
-        });
+        }
+    }
+
+    private function recordUnavailableLocked(string $message): void
+    {
+        $message = $this->summary($message);
+        $db = $this->database->native();
+        $updated = $db->query($db->update('table.options')->rows(['value' => $message])
+            ->where('name = ?', self::CRON_ERROR_OPTION)
+            ->where('user = ?', 0));
+        if (0 === $updated) {
+            try {
+                $db->query($db->insert('table.options')->rows([
+                    'name' => self::CRON_ERROR_OPTION,
+                    'user' => 0,
+                    'value' => $message,
+                ]));
+            } catch (\Throwable $error) {
+                $db->query($db->update('table.options')->rows(['value' => $message])
+                    ->where('name = ?', self::CRON_ERROR_OPTION)
+                    ->where('user = ?', 0));
+            }
+        }
+        $stored = $this->database->fetchRowWrite($db->select('value')->from('table.options')
+            ->where('name = ?', self::CRON_ERROR_OPTION)
+            ->where('user = ?', 0)
+            ->limit(1));
+        if (!$stored || !hash_equals((string) $stored['value'], $message)) {
+            throw new \RuntimeException('无法保存自动 Cron 不可用状态。');
+        }
     }
 
     private function assertSupported(): void
     {
         if ('Linux' !== $this->osFamily) {
-            throw new \RuntimeException('自动 Cron 仅支持 Linux。');
+            throw new CronUnavailableException('自动 Cron 仅支持 Linux。');
         }
         if (null === $this->runner && !is_callable('proc_open')) {
-            throw new \RuntimeException('PHP proc_open 已禁用，无法自动管理系统 Cron。');
+            throw new CronUnavailableException('PHP proc_open 已禁用，无法自动管理系统 Cron。');
         }
     }
 
     private function findCrontabBinary(): string
     {
-        return $this->findExecutable(
-            $this->crontabOverride,
-            array_merge(
-                ['/usr/bin/crontab', '/usr/local/bin/crontab', '/bin/crontab'],
-                $this->pathCandidates('crontab')
-            ),
-            'crontab'
+        $candidates = array_merge(
+            ['/usr/bin/crontab', '/usr/local/bin/crontab', '/bin/crontab'],
+            $this->pathCandidates('crontab')
         );
+
+        if (null !== $this->crontabOverride) {
+            if (!$this->validCommandPath($this->crontabOverride)) {
+                throw new CronUnavailableException('crontab 路径无效。');
+            }
+            try {
+                $this->readCrontab($this->crontabOverride);
+            } catch (CronUnavailableException $error) {
+                throw new CronUnavailableException(
+                    'crontab 路径不可用：' . $this->summary($error->getMessage()),
+                    0,
+                    $error
+                );
+            }
+            return $this->crontabOverride;
+        }
+
+        $errors = [];
+        foreach (array_values(array_unique(array_filter($candidates))) as $candidate) {
+            if (!$this->validCommandPath($candidate)) {
+                continue;
+            }
+            try {
+                $this->readCrontab($candidate);
+                return $candidate;
+            } catch (CronUnavailableException $error) {
+                $errors[] = $candidate . ': ' . $this->summary($error->getMessage());
+            }
+        }
+
+        $detail = $errors ? '：' . implode('；', array_unique($errors)) : '';
+        throw new CronUnavailableException('没有可用的 crontab' . $detail . '。');
     }
 
     private function findPhpCli(): string
@@ -170,50 +354,38 @@ final class SystemCronManager
 
         $errors = [];
         foreach (array_values(array_unique(array_filter($candidates))) as $candidate) {
-            if (!$this->validExecutable($candidate)) {
+            if (!$this->validCommandPath($candidate)) {
                 continue;
             }
-            $sapi = $this->run([$candidate, '-r', 'echo PHP_SAPI;'], '', 10);
+            try {
+                $sapi = $this->run([$candidate, '-r', 'echo PHP_SAPI;'], '', 10);
+            } catch (CronUnavailableException $error) {
+                $errors[] = basename($candidate) . ' 无法执行';
+                continue;
+            }
             if (0 !== $sapi['code'] || 'cli' !== trim($sapi['stdout'])) {
                 $errors[] = basename($candidate) . ' 不是 PHP CLI';
                 continue;
             }
             $console = $this->consolePath();
-            $selfTest = $this->run([$candidate, $console, 'help'], '', 15);
-            if (0 !== $selfTest['code']) {
-                $errors[] = basename($candidate) . ' 无法启动 FriendLinks CLI';
+            $selfTest = $this->run([$candidate, $console, 'self-test'], '', 15);
+            if (0 !== $selfTest['code'] || 'FriendLinks CLI ready' !== trim($selfTest['stdout'])) {
+                $detail = $this->summary(trim($selfTest['stderr'] . "\n" . $selfTest['stdout']));
+                $errors[] = basename($candidate) . ' 无法启动 FriendLinks CLI：' . $detail;
                 continue;
             }
             return $candidate;
         }
 
         $detail = $errors ? '：' . implode('；', array_unique($errors)) : '';
-        throw new \RuntimeException('未找到可用的 PHP CLI' . $detail . '。');
+        throw new CronUnavailableException('未找到可用的 PHP CLI' . $detail . '。');
     }
 
-    private function findExecutable(?string $override, array $candidates, string $name): string
-    {
-        if (null !== $override) {
-            if (!$this->validExecutable($override)) {
-                throw new \RuntimeException($name . ' 路径不可执行。');
-            }
-            return $override;
-        }
-        foreach (array_values(array_unique(array_filter($candidates))) as $candidate) {
-            if ($this->validExecutable($candidate)) {
-                return $candidate;
-            }
-        }
-        throw new \RuntimeException('未找到可执行的 ' . $name . '。');
-    }
-
-    private function validExecutable(string $path): bool
+    private function validCommandPath(string $path): bool
     {
         return '' !== $path
             && '/' === $path[0]
-            && !preg_match('/[\x00-\x1F\x7F]/', $path)
-            && is_file($path)
-            && is_executable($path);
+            && !preg_match('/[\x00-\x1F\x7F]/', $path);
     }
 
     private function pathCandidates(string $binary): array
@@ -248,7 +420,7 @@ final class SystemCronManager
         if (1 === $result['code'] && preg_match('/\bno crontab\b/i', $message)) {
             return '';
         }
-        throw new \RuntimeException('无法读取当前 crontab：' . $this->summary($message));
+        throw new CronUnavailableException('无法读取当前 crontab：' . $this->summary($message));
     }
 
     private function writeCrontab(string $crontab, string $content): void
@@ -258,7 +430,7 @@ final class SystemCronManager
         }
         $result = $this->run([$crontab, '-'], $content, 10);
         if (0 !== $result['code']) {
-            throw new \RuntimeException(
+            throw new CronUnavailableException(
                 '无法写入当前用户 crontab：' . $this->summary($result['stderr'])
             );
         }
@@ -271,15 +443,15 @@ final class SystemCronManager
         string $cronId,
         bool $expected
     ): void {
-        $written = false;
+        $writeAttempted = false;
         try {
             $latest = $this->readCrontab($crontab);
             if ($this->normalizeCrontab($latest) !== $this->normalizeCrontab($original)) {
                 throw new \RuntimeException('crontab 在更新前已被其他进程修改，请重试。');
             }
-            $this->writeCrontab($crontab, $updated);
-            $written = true;
+            $writeAttempted = true;
             $this->writeStateUncertain = true;
+            $this->writeCrontab($crontab, $updated);
             $verified = $this->readCrontab($crontab);
             if (
                 $this->normalizeCrontab($verified) !== $this->normalizeCrontab($updated)
@@ -289,10 +461,13 @@ final class SystemCronManager
             }
             $this->writeStateUncertain = false;
         } catch (\Throwable $error) {
-            if ($written) {
+            if ($writeAttempted) {
                 try {
                     $current = $this->readCrontab($crontab);
-                    $rollback = $this->mergeRollback($current, $original, $cronId);
+                    $rollback = $this->normalizeCrontab($current)
+                        === $this->normalizeCrontab($original)
+                        ? $this->normalizeCrontab($original)
+                        : $this->mergeRollback($current, $original, $cronId);
                     if ($this->normalizeCrontab($current) !== $rollback) {
                         $this->writeCrontab($crontab, $rollback);
                     }
@@ -449,7 +624,7 @@ final class SystemCronManager
         }
         return $this->cronEscapePath($php)
             . ' ' . $this->cronEscapePath($console)
-            . ' check --due --limit=50 --max-seconds=240 >/dev/null 2>&1';
+            . ' check --scheduled --due >/dev/null 2>&1';
     }
 
     private function cronEscapePath(string $path): string
@@ -461,7 +636,7 @@ final class SystemCronManager
     {
         $path = $this->pluginRoot . '/bin/console.php';
         if (!is_file($path) || !is_readable($path)) {
-            throw new \RuntimeException('FriendLinks CLI 入口不存在或不可读。');
+            throw new CronUnavailableException('FriendLinks CLI 入口不存在或不可读。');
         }
         return $path;
     }
@@ -482,7 +657,7 @@ final class SystemCronManager
         return '' === trim($crontab) ? '' : rtrim($crontab, "\n") . "\n";
     }
 
-    private function assertOwner(bool $create): bool
+    private function assertOwner(bool $create): void
     {
         $current = $this->currentOwner();
         $db = $this->database->native();
@@ -494,7 +669,7 @@ final class SystemCronManager
             if (!hash_equals((string) $row['value'], $current)) {
                 throw new \RuntimeException('当前 PHP 系统用户不是 FriendLinks Cron 的安装用户。');
             }
-            return false;
+            return;
         }
         if (!$create) {
             throw new \RuntimeException('FriendLinks Cron 安装用户记录缺失或无效。');
@@ -503,7 +678,6 @@ final class SystemCronManager
         $updated = $db->query($db->update('table.options')->rows(['value' => $current])
             ->where('name = ?', self::CRON_OWNER_OPTION)
             ->where('user = ?', 0));
-        $created = 0 !== $updated;
         if (0 === $updated) {
             try {
                 $db->query($db->insert('table.options')->rows([
@@ -511,7 +685,6 @@ final class SystemCronManager
                     'user' => 0,
                     'value' => $current,
                 ]));
-                $created = true;
             } catch (\Throwable $error) {
             }
         }
@@ -523,24 +696,73 @@ final class SystemCronManager
         if (!$row || !hash_equals((string) $row['value'], $current)) {
             throw new \RuntimeException('无法持久化 FriendLinks Cron 安装用户。');
         }
-        return $created;
     }
 
-    private function releaseOwner(): void
+    private function metadataSnapshot(): array
     {
-        $current = $this->currentOwner();
         $db = $this->database->native();
-        $db->query($db->delete('table.options')
-            ->where('name = ?', self::CRON_OWNER_OPTION)
-            ->where('user = ?', 0)
-            ->where('value = ?', $current));
+        $snapshot = [];
+        foreach ([self::CRON_ID_OPTION, self::CRON_OWNER_OPTION, self::CRON_PHP_OPTION] as $name) {
+            $row = $this->database->fetchRowWrite($db->select('value')->from('table.options')
+                ->where('name = ?', $name)
+                ->where('user = ?', 0)
+                ->limit(1));
+            $snapshot[$name] = $row ? (string) $row['value'] : null;
+        }
+        return $snapshot;
+    }
+
+    private function restoreMetadata(array $snapshot): void
+    {
+        $this->clearMetadata();
+        $db = $this->database->native();
+        foreach ($snapshot as $name => $value) {
+            if (null === $value) {
+                continue;
+            }
+            $db->query($db->insert('table.options')->rows([
+                'name' => $name,
+                'user' => 0,
+                'value' => $value,
+            ]));
+        }
+        if ($snapshot !== $this->metadataSnapshot()) {
+            throw new \RuntimeException('Cron 元数据恢复后与原状态不一致。');
+        }
+    }
+
+    private function clearMetadata(): void
+    {
+        $db = $this->database->native();
+        foreach ([
+            self::CRON_ID_OPTION,
+            self::CRON_OWNER_OPTION,
+            self::CRON_PHP_OPTION,
+            self::CRON_ERROR_OPTION,
+        ] as $name) {
+            $db->query($db->delete('table.options')
+                ->where('name = ?', $name)
+                ->where('user = ?', 0));
+        }
+    }
+
+    private function storedUnavailable(): ?string
+    {
+        $db = $this->database->native();
         $row = $this->database->fetchRowWrite($db->select('value')->from('table.options')
-            ->where('name = ?', self::CRON_OWNER_OPTION)
+            ->where('name = ?', self::CRON_ERROR_OPTION)
             ->where('user = ?', 0)
             ->limit(1));
-        if ($row && hash_equals((string) $row['value'], $current)) {
-            throw new \RuntimeException('无法删除本次新建的 Cron 安装用户记录。');
-        }
+        $message = $row ? trim((string) $row['value']) : '';
+        return '' === $message ? null : $message;
+    }
+
+    private function clearUnavailable(): void
+    {
+        $db = $this->database->native();
+        $db->query($db->delete('table.options')
+            ->where('name = ?', self::CRON_ERROR_OPTION)
+            ->where('user = ?', 0));
     }
 
     private function currentOwner(): string
@@ -550,7 +772,7 @@ final class SystemCronManager
         }
         $owner = @fileowner('/proc/self');
         if (false === $owner) {
-            throw new \RuntimeException('无法识别当前 PHP 系统用户。');
+            throw new CronUnavailableException('无法识别当前 PHP 系统用户。');
         }
         return (string) $owner;
     }
@@ -563,8 +785,20 @@ final class SystemCronManager
             ->where('user = ?', 0)
             ->limit(1));
         $path = $row ? (string) $row['value'] : '';
-        if (!$this->validExecutable($path)) {
+        if (!$this->validCommandPath($path)) {
             throw new \RuntimeException('FriendLinks Cron 的 PHP CLI 记录缺失或不可执行。');
+        }
+        try {
+            $sapi = $this->run([$path, '-r', 'echo PHP_SAPI;'], '', 10);
+        } catch (CronUnavailableException $error) {
+            throw new CronUnavailableException(
+                'FriendLinks Cron 的 PHP CLI 记录不可用：' . $this->summary($error->getMessage()),
+                0,
+                $error
+            );
+        }
+        if (0 !== $sapi['code'] || 'cli' !== trim($sapi['stdout'])) {
+            throw new CronUnavailableException('FriendLinks Cron 的 PHP CLI 记录不可执行。');
         }
         return $path;
     }
@@ -660,9 +894,24 @@ final class SystemCronManager
         $path = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR)
             . DIRECTORY_SEPARATOR
             . 'friendlinks-crontab-' . substr(hash('sha256', $crontab . '|' . $identity), 0, 20) . '.lock';
+        return $this->withFileLock($path, $callback);
+    }
+
+    private function withLifecycleLock(callable $callback)
+    {
+        $root = rtrim(str_replace('\\', '/', $this->pluginRoot), '/');
+        $identity = function_exists('posix_geteuid') ? (string) posix_geteuid() : (string) getmyuid();
+        $path = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR)
+            . DIRECTORY_SEPARATOR
+            . 'friendlinks-lifecycle-' . substr(hash('sha256', $root . '|' . $identity), 0, 20) . '.lock';
+        return $this->withFileLock($path, $callback);
+    }
+
+    private function withFileLock(string $path, callable $callback)
+    {
         $handle = @fopen($path, 'c');
         if (false === $handle) {
-            throw new \RuntimeException('无法创建 FriendLinks Cron 并发锁。');
+            throw new CronUnavailableException('无法创建 FriendLinks Cron 并发锁。');
         }
 
         $deadline = microtime(true) + 10;
@@ -690,7 +939,7 @@ final class SystemCronManager
                 !is_array($result)
                 || !isset($result['code'], $result['stdout'], $result['stderr'])
             ) {
-                throw new \RuntimeException('Cron 命令执行器返回了无效结果。');
+                throw new CronUnavailableException('Cron 命令执行器返回了无效结果。');
             }
             return [
                 'code' => (int) $result['code'],
@@ -717,7 +966,7 @@ final class SystemCronManager
             ['bypass_shell' => true]
         );
         if (!is_resource($process)) {
-            throw new \RuntimeException('无法启动 Cron 管理命令。');
+            throw new CronUnavailableException('无法启动 Cron 管理命令。');
         }
 
         stream_set_blocking($pipes[0], false);
@@ -736,11 +985,13 @@ final class SystemCronManager
                     if ($inputOffset < $inputLength) {
                         $written = @fwrite($pipes[0], substr($input, $inputOffset, 8192));
                         if (false === $written) {
-                            throw new \RuntimeException('无法向 Cron 管理命令写入数据。');
+                            fclose($pipes[0]);
+                            $stdinOpen = false;
+                        } else {
+                            $inputOffset += $written;
                         }
-                        $inputOffset += $written;
                     }
-                    if ($inputOffset >= $inputLength) {
+                    if ($stdinOpen && $inputOffset >= $inputLength) {
                         fclose($pipes[0]);
                         $stdinOpen = false;
                     }
@@ -752,7 +1003,7 @@ final class SystemCronManager
                     break;
                 }
                 if (microtime(true) >= $deadline) {
-                    throw new \RuntimeException('Cron 管理命令执行超时。');
+                    throw new CronUnavailableException('Cron 管理命令执行超时。');
                 }
                 usleep(10000);
             }

@@ -6,11 +6,12 @@ use TypechoPlugin\FriendLinks\Application\LinkService;
 use TypechoPlugin\FriendLinks\Application\NotificationDispatcher;
 use TypechoPlugin\FriendLinks\Application\Settings;
 use TypechoPlugin\FriendLinks\Application\Worker;
+use TypechoPlugin\FriendLinks\Infrastructure\CronUnavailableException;
 use TypechoPlugin\FriendLinks\Infrastructure\MigrationManager;
 use TypechoPlugin\FriendLinks\Infrastructure\Repositories;
 use TypechoPlugin\FriendLinks\Infrastructure\SystemCronManager;
 use TypechoPlugin\FriendLinks\Infrastructure\WorkerSigner;
-use Utils\Helper;
+use TypechoPlugin\FriendLinks\Plugin as FriendLinksPlugin;
 use Widget\ActionInterface;
 use Widget\Base\Options as OptionsWidget;
 use Widget\Notice;
@@ -239,7 +240,9 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
 
     private function saveSettings(): void
     {
-        $settings = Settings::sanitize([
+        $cron = new SystemCronManager();
+        $cronStatus = $cron->status();
+        $input = [
             'page_cid' => $this->request->get('page_cid', 0),
             'frontend_template' => $this->request->get('frontend_template', 'cards'),
             'http_interval' => $this->request->get('http_interval', 21600),
@@ -255,8 +258,38 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
             'rel_noreferrer' => $this->request->get('rel_noreferrer', 0),
             'rel_nofollow' => $this->request->get('rel_nofollow', 0),
             'http_worker_enabled' => $this->request->get('http_worker_enabled', 0),
-        ]);
+        ];
+        if (!empty($cronStatus['available'])) {
+            $input += [
+                'cron_interval_value' => $this->request->get('cron_interval_value', 5),
+                'cron_interval_unit' => $this->request->get('cron_interval_unit', 'minutes'),
+                'cli_worker_limit' => $this->request->get('cli_worker_limit', 50),
+                'cli_worker_max_seconds' => $this->request->get('cli_worker_max_seconds', 240),
+            ];
+        }
+
+        $settings = Settings::sanitize($input);
         Settings::save($settings);
+        if (!empty($cronStatus['available']) && empty($cronStatus['installed'])) {
+            try {
+                $cron->install();
+            } catch (CronUnavailableException $error) {
+                throw new RuntimeException('自动 Cron 修复失败：' . $error->getMessage());
+            }
+        }
+        if (!empty($cronStatus['available'])) {
+            $unitLabels = array_map(static function (array $unit): string {
+                return $unit['label'];
+            }, Settings::cronIntervalUnits());
+            $unit = (string) $settings['cron_interval_unit'];
+            Notice::alloc()->set(
+                '设置已保存。CLI Worker 实际执行周期：每 '
+                    . (int) $settings['cron_interval_value'] . ' '
+                    . ($unitLabels[$unit] ?? $unit) . '。',
+                'success'
+            );
+            return;
+        }
         Notice::alloc()->set('设置已保存。', 'success');
     }
 
@@ -366,8 +399,7 @@ class FriendLinks_Action extends OptionsWidget implements ActionInterface
         if ('DELETE' !== (string) $this->request->get('confirmation', '')) {
             throw new InvalidArgumentException('请输入 DELETE 确认卸载。');
         }
-        (new SystemCronManager())->remove();
-        Helper::removePlugin('FriendLinks');
+        FriendLinksPlugin::uninstall();
         (new MigrationManager())->uninstall();
         Notice::alloc()->set('FriendLinks 已停用，业务表已删除。', 'success');
         $this->response->redirect(Common::url('plugins.php', $this->options->adminUrl));

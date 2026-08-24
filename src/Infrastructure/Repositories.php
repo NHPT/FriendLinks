@@ -3,10 +3,13 @@
 namespace TypechoPlugin\FriendLinks\Infrastructure;
 
 use Typecho\Db;
+use TypechoPlugin\FriendLinks\Domain\CliSchedule;
 use TypechoPlugin\FriendLinks\Domain\Text;
 
 final class Repositories
 {
+    private const CLI_SCHEDULE_LOCK_NAMESPACE = 'scheduler_lock';
+
     /** @var Database */
     private $database;
 
@@ -664,6 +667,88 @@ final class Repositories
     {
         return $this->db->fetchAll($this->db->select()->from('table.flm_runs')
             ->order('started_at', Db::SORT_DESC)->limit(max(1, min(100, $limit))));
+    }
+
+    public function latestRunByMode(string $mode, bool $consistent = false): ?array
+    {
+        if (!in_array($mode, ['cli', 'http', 'admin'], true)) {
+            throw new \InvalidArgumentException('Worker mode is invalid.');
+        }
+        $query = $this->db->select()->from('table.flm_runs')
+            ->where('mode = ?', $mode)
+            ->order('started_at', Db::SORT_DESC)
+            ->limit(1);
+        $row = $consistent
+            ? $this->database->fetchRowWrite($query)
+            : $this->db->fetchRow($query);
+        return $row ?: null;
+    }
+
+    public function claimCliSchedule(int $now, int $intervalSeconds, int $maxSeconds): array
+    {
+        $lockKey = $this->ensureCliScheduleLock($now);
+        return $this->database->transaction(function () use ($now, $intervalSeconds, $maxSeconds, $lockKey) {
+            $lockQuery = $this->db->select('cache_key')->from('table.flm_cache')
+                ->where('cache_key = ?', $lockKey)
+                ->where('namespace = ?', self::CLI_SCHEDULE_LOCK_NAMESPACE)
+                ->limit(1);
+            if ('sqlite' === $this->database->driver()) {
+                $lockRow = $this->database->fetchRowWrite($lockQuery);
+            } else {
+                $lockRow = $this->database->fetchRowWrite(
+                    $lockQuery->prepare($lockQuery) . ' FOR UPDATE'
+                );
+            }
+            if (!$lockRow) {
+                throw new \RuntimeException('CLI schedule lock is unavailable.');
+            }
+
+            $decision = CliSchedule::decision(
+                $this->latestRunByMode('cli', true),
+                $now,
+                $intervalSeconds,
+                $maxSeconds
+            );
+            if (empty($decision['due'])) {
+                return $decision + ['run_id' => null];
+            }
+
+            $runId = bin2hex(random_bytes(16));
+            $this->createRun($runId, 'cli', $now);
+            return $decision + ['run_id' => $runId];
+        });
+    }
+
+    private function ensureCliScheduleLock(int $now): string
+    {
+        $key = hash('sha256', self::CLI_SCHEDULE_LOCK_NAMESPACE);
+        $rows = [
+            'namespace' => self::CLI_SCHEDULE_LOCK_NAMESPACE,
+            'payload' => '',
+            'expires_at' => 2147483647,
+            'updated_at' => $now,
+        ];
+        $updated = $this->db->query($this->db->update('table.flm_cache')
+            ->rows($rows)
+            ->where('cache_key = ?', $key));
+        if (0 === $updated) {
+            try {
+                $this->db->query($this->db->insert('table.flm_cache')->rows(
+                    ['cache_key' => $key] + $rows
+                ));
+            } catch (\Throwable $error) {
+                $row = $this->database->fetchRowWrite(
+                    $this->db->select('cache_key')->from('table.flm_cache')
+                        ->where('cache_key = ?', $key)
+                        ->where('namespace = ?', self::CLI_SCHEDULE_LOCK_NAMESPACE)
+                        ->limit(1)
+                );
+                if (!$row) {
+                    throw $error;
+                }
+            }
+        }
+        return $key;
     }
 
     public function history(int $limit = 100, int $linkId = 0): array

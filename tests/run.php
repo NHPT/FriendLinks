@@ -3,6 +3,7 @@
 require dirname(__DIR__) . '/vendor/autoload.php';
 
 use TypechoPlugin\FriendLinks\Application\NotificationPlanner;
+use TypechoPlugin\FriendLinks\Domain\CliSchedule;
 use TypechoPlugin\FriendLinks\Domain\IpAddress;
 use TypechoPlugin\FriendLinks\Domain\NotificationTemplate;
 use TypechoPlugin\FriendLinks\Domain\PublicSuffixList;
@@ -38,6 +39,49 @@ function rejects(callable $callback, string $message): void
     }
     check(false, $message);
 }
+
+$scheduleNow = 1700000000;
+check(
+    CliSchedule::decision(null, $scheduleNow, 300, 240)['due'],
+    'CLI schedule runs when no previous CLI execution exists'
+);
+$notDue = CliSchedule::decision([
+    'status' => 'completed',
+    'started_at' => $scheduleNow - 60,
+    'heartbeat_at' => $scheduleNow - 30,
+], $scheduleNow, 300, 240);
+check(
+    !$notDue['due']
+        && 'schedule_not_due' === $notDue['reason']
+        && $scheduleNow + 240 === $notDue['next_run_at'],
+    'CLI schedule skips until the configured interval elapses'
+);
+$running = CliSchedule::decision([
+    'status' => 'running',
+    'started_at' => $scheduleNow - 600,
+    'heartbeat_at' => $scheduleNow - 10,
+], $scheduleNow, 300, 240);
+check(
+    !$running['due'] && 'worker_running' === $running['reason'],
+    'CLI schedule does not overlap a live CLI worker'
+);
+check(
+    CliSchedule::decision([
+        'status' => 'running',
+        'started_at' => $scheduleNow - 3600,
+        'heartbeat_at' => $scheduleNow - 3600,
+    ], $scheduleNow, 300, 240)['due'],
+    'CLI schedule recovers after a stale running record'
+);
+$clockSkew = CliSchedule::decision([
+    'status' => 'completed',
+    'started_at' => $scheduleNow + 3600,
+    'heartbeat_at' => $scheduleNow + 3600,
+], $scheduleNow, 300, 240);
+check(
+    !$clockSkew['due'] && 'clock_skew' === $clockSkew['reason'],
+    'CLI schedule does not run every minute after a backward clock adjustment'
+);
 
 $urls = new UrlNormalizer();
 check(

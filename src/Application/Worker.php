@@ -51,9 +51,18 @@ final class Worker
         $this->notificationDispatcher = $notificationDispatcher ?: new NotificationDispatcher($this->repositories);
     }
 
-    public function run(string $mode = 'cli', int $limit = 50, int $maxSeconds = 240, array $linkIds = []): array
+    public function run(
+        string $mode = 'cli',
+        int $limit = 50,
+        int $maxSeconds = 240,
+        array $linkIds = [],
+        ?string $runId = null
+    ): array
     {
         $mode = in_array($mode, ['http', 'admin'], true) ? $mode : 'cli';
+        if (null !== $runId && ('cli' !== $mode || !preg_match('/^[a-f0-9]{32}$/D', $runId))) {
+            throw new \InvalidArgumentException('Pre-created Worker run is invalid.');
+        }
         $limitCap = 'http' === $mode ? 5 : ('admin' === $mode ? 20 : 500);
         $secondsCap = 'http' === $mode ? 20 : ('admin' === $mode ? 30 : 3600);
         $limit = max(1, min($limitCap, $limit));
@@ -66,15 +75,17 @@ final class Worker
         }
         $startedAt = time();
         $deadline = microtime(true) + $maxSeconds;
-        $runId = bin2hex(random_bytes(16));
+        $runCreated = null !== $runId;
+        $runId = $runId ?: bin2hex(random_bytes(16));
         $counts = ['claimed' => 0, 'completed' => 0, 'failed' => 0];
         $errors = [];
         $notificationCounts = ['claimed' => 0, 'sent' => 0, 'failed' => 0, 'errors' => []];
-        $runCreated = false;
 
         try {
-            $this->repositories->createRun($runId, $mode, $startedAt);
-            $runCreated = true;
+            if (!$runCreated) {
+                $this->repositories->createRun($runId, $mode, $startedAt);
+                $runCreated = true;
+            }
             if (!extension_loaded('curl')) {
                 throw new \RuntimeException('PHP cURL 扩展未安装，自动检测不可用。');
             }

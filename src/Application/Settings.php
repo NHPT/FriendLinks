@@ -8,7 +8,6 @@ use TypechoPlugin\FriendLinks\Domain\UrlNormalizer;
 use TypechoPlugin\FriendLinks\Infrastructure\Database;
 use TypechoPlugin\FriendLinks\Presentation\TemplateCatalog;
 use Widget\Options;
-use Widget\Plugins\Edit;
 
 final class Settings
 {
@@ -22,6 +21,10 @@ final class Settings
             'http_interval' => 21600,
             'tls_interval' => 86400,
             'domain_interval' => 86400,
+            'cron_interval_value' => 5,
+            'cron_interval_unit' => 'minutes',
+            'cli_worker_limit' => 50,
+            'cli_worker_max_seconds' => 240,
             'connect_timeout' => 3,
             'request_timeout' => 10,
             'max_redirects' => 5,
@@ -56,6 +59,18 @@ final class Settings
             'email_recipients' => '',
             'notification_subject_template' => NotificationTemplate::DEFAULT_SUBJECT,
             'notification_message_template' => NotificationTemplate::DEFAULT_MESSAGE,
+        ];
+    }
+
+    public static function cronIntervalUnits(): array
+    {
+        return [
+            'seconds' => ['label' => '秒', 'factor' => 1, 'min' => 60, 'max' => 604800],
+            'minutes' => ['label' => '分钟', 'factor' => 60, 'min' => 1, 'max' => 10080],
+            'hours' => ['label' => '小时', 'factor' => 3600, 'min' => 1, 'max' => 168],
+            'days' => ['label' => '天', 'factor' => 86400, 'min' => 1, 'max' => 365],
+            'weeks' => ['label' => '周', 'factor' => 604800, 'min' => 1, 'max' => 52],
+            'months' => ['label' => '月', 'factor' => 2592000, 'min' => 1, 'max' => 12],
         ];
     }
 
@@ -113,6 +128,8 @@ final class Settings
             'http_interval' => [300, 604800],
             'tls_interval' => [3600, 2592000],
             'domain_interval' => [3600, 2592000],
+            'cli_worker_limit' => [1, 500],
+            'cli_worker_max_seconds' => [30, 3600],
             'connect_timeout' => [1, 30],
             'request_timeout' => [2, 60],
             'max_redirects' => [0, 10],
@@ -130,6 +147,24 @@ final class Settings
             }
             $current[$key] = (int) $value;
         }
+        $unit = (string) ($input['cron_interval_unit'] ?? $current['cron_interval_unit']);
+        $units = self::cronIntervalUnits();
+        if (!isset($units[$unit])) {
+            throw new \InvalidArgumentException('Cron 调度周期单位无效。');
+        }
+        $intervalValue = filter_var(
+            $input['cron_interval_value'] ?? $current['cron_interval_value'],
+            FILTER_VALIDATE_INT
+        );
+        if (
+            false === $intervalValue
+            || $intervalValue < $units[$unit]['min']
+            || $intervalValue > $units[$unit]['max']
+        ) {
+            throw new \InvalidArgumentException('Cron 调度周期超出所选单位的允许范围。');
+        }
+        $current['cron_interval_value'] = (int) $intervalValue;
+        $current['cron_interval_unit'] = $unit;
 
         foreach ([
             'restricted_is_healthy',
@@ -149,6 +184,21 @@ final class Settings
 
         self::assertPage((int) $current['page_cid']);
         return $current;
+    }
+
+    public static function cronIntervalSeconds(array $settings): int
+    {
+        $value = (int) ($settings['cron_interval_value'] ?? 0);
+        $unit = (string) ($settings['cron_interval_unit'] ?? '');
+        $units = self::cronIntervalUnits();
+        if (
+            !isset($units[$unit])
+            || $value < $units[$unit]['min']
+            || $value > $units[$unit]['max']
+        ) {
+            throw new \InvalidArgumentException('Cron 调度周期无效。');
+        }
+        return $value * $units[$unit]['factor'];
     }
 
     public static function sanitizeNotifications(array $input): array
@@ -295,8 +345,34 @@ final class Settings
         if (isset($settings['worker_secret']) && preg_match('/^[a-f0-9]{64}$/i', (string) $settings['worker_secret'])) {
             self::persistWorkerSecret((string) $settings['worker_secret']);
         }
+        $settings = array_replace(self::defaults(), $settings);
         $settings['worker_secret'] = '';
-        Edit::configPlugin('FriendLinks', $settings);
+        $database = new Database();
+        $db = $database->native();
+        $value = serialize($settings);
+        $updated = $db->query($db->update('table.options')->rows(['value' => $value])
+            ->where('name = ?', 'plugin:FriendLinks')
+            ->where('user = ?', 0));
+        if (0 === $updated) {
+            try {
+                $db->query($db->insert('table.options')->rows([
+                    'name' => 'plugin:FriendLinks',
+                    'user' => 0,
+                    'value' => $value,
+                ]));
+            } catch (\Throwable $error) {
+                $db->query($db->update('table.options')->rows(['value' => $value])
+                    ->where('name = ?', 'plugin:FriendLinks')
+                    ->where('user = ?', 0));
+            }
+        }
+        $row = $database->fetchRowWrite($db->select('value')->from('table.options')
+            ->where('name = ?', 'plugin:FriendLinks')
+            ->where('user = ?', 0)
+            ->limit(1));
+        if (!$row || !hash_equals($value, (string) $row['value'])) {
+            throw new \RuntimeException('无法持久化 FriendLinks 设置。');
+        }
     }
 
     public static function initialize(array $settings): void

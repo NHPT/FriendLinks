@@ -3,13 +3,28 @@
 use Typecho\Router;
 use TypechoPlugin\FriendLinks\Application\Settings;
 use TypechoPlugin\FriendLinks\Infrastructure\Repositories;
+use TypechoPlugin\FriendLinks\Infrastructure\SystemCronManager;
 use TypechoPlugin\FriendLinks\Presentation\Renderer;
+use TypechoPlugin\FriendLinks\Presentation\StatusLabels;
 use TypechoPlugin\FriendLinks\Presentation\TemplateCatalog;
 
 require __DIR__ . '/_bootstrap.php';
 
 $settings = Settings::all();
-$pages = (new Repositories())->publishedPages();
+$repositories = new Repositories();
+$pages = $repositories->publishedPages();
+$latestRun = $repositories->latestRunByMode('cli');
+$cronIntervalValue = (int) $settings['cron_interval_value'];
+$cronUnits = Settings::cronIntervalUnits();
+$cronUnitLabels = array_map(static function (array $unit): string {
+    return $unit['label'];
+}, $cronUnits);
+$cronIntervalUnit = (string) $settings['cron_interval_unit'];
+$cronIntervalUnit = isset($cronUnits[$cronIntervalUnit]) ? $cronIntervalUnit : 'minutes';
+$cronIntervalLabel = '每 ' . $cronIntervalValue . ' ' . $cronUnitLabels[$cronIntervalUnit];
+$cronIntervalRange = $cronUnits[$cronIntervalUnit];
+$cronStatus = (new SystemCronManager())->status();
+$cronDisabled = empty($cronStatus['available']);
 $templateCatalog = new TemplateCatalog();
 $templates = $templateCatalog->all();
 $templateData = [];
@@ -90,10 +105,17 @@ $workerUrl = Router::url('friendlinks-worker', [], $options->index);
         <?php flm_tabs('settings'); ?>
         <?php if ($pageError): ?><p class="flm-warning"><?php echo flm_e($pageError); ?></p><?php endif; ?>
 
-        <form class="flm-form flm-settings-form" method="post" action="<?php echo flm_e(flm_action_url('save-settings')); ?>" data-flm-settings>
+        <form
+          class="flm-form flm-settings-form"
+          method="post"
+          action="<?php echo flm_e(flm_action_url('save-settings')); ?>"
+          data-flm-settings
+          data-flm-cron-unavailable="<?php echo $cronDisabled ? '1' : '0'; ?>"
+        >
           <ul class="typecho-option-tabs flm-settings-tabs clearfix" role="tablist" aria-label="设置分类">
             <li class="current"><button type="button" role="tab" aria-selected="true" data-flm-settings-tab="display">页面与展示</button></li>
             <li><button type="button" role="tab" aria-selected="false" data-flm-settings-tab="detection">检测策略</button></li>
+            <li><button type="button" role="tab" aria-selected="false" data-flm-settings-tab="cli-worker">CLI Worker</button></li>
             <li><button type="button" role="tab" aria-selected="false" data-flm-settings-tab="worker">HTTP Worker</button></li>
           </ul>
 
@@ -194,6 +216,63 @@ $workerUrl = Router::url('friendlinks-worker', [], $options->index);
             </div>
           </section>
 
+          <section class="flm-settings-panel" role="tabpanel" data-flm-settings-panel="cli-worker" hidden>
+            <h3>CLI Worker</h3>
+            <?php if (!empty($cronStatus['available']) && !empty($cronStatus['installed'])): ?>
+              <p><strong>自动任务已安装</strong> · 调度周期 <?php echo flm_e($cronIntervalLabel); ?></p>
+            <?php elseif (!empty($cronStatus['available'])): ?>
+              <p class="flm-warning">当前环境支持自动 Cron，但尚未检测到本实例任务；保存设置时会尝试安装。</p>
+            <?php else: ?>
+              <p class="flm-error" role="alert">
+                <strong>自动 Cron 不可用：</strong><?php echo flm_e($cronStatus['message']); ?><br>
+                请在主机面板手工部署 CLI Cron，或改用签名 HTTP Worker。下方自动 CLI 调度参数当前不可修改。
+              </p>
+            <?php endif; ?>
+            <p>
+              最近运行：
+              <?php if ($latestRun): ?>
+                <?php echo flm_e(date('Y-m-d H:i:s', (int) $latestRun['heartbeat_at'])); ?>
+                · <?php echo flm_e(StatusLabels::runState($latestRun['status'])); ?>
+              <?php else: ?>
+                从未运行
+              <?php endif; ?>
+            </p>
+            <?php if ($cronDisabled): ?>
+              <input type="hidden" name="cron_interval_value" value="<?php echo $cronIntervalValue; ?>">
+              <input type="hidden" name="cron_interval_unit" value="<?php echo flm_e($cronIntervalUnit); ?>">
+              <input type="hidden" name="cli_worker_limit" value="<?php echo (int) $settings['cli_worker_limit']; ?>">
+              <input type="hidden" name="cli_worker_max_seconds" value="<?php echo (int) $settings['cli_worker_max_seconds']; ?>">
+            <?php endif; ?>
+            <div class="flm-field-grid">
+              <div class="flm-field">
+                <label for="flm-cron-interval-value">调度周期</label>
+                <input id="flm-cron-interval-value" type="number" name="cron_interval_value" min="<?php echo (int) $cronIntervalRange['min']; ?>" max="<?php echo (int) $cronIntervalRange['max']; ?>" value="<?php echo $cronIntervalValue; ?>"<?php echo $cronDisabled ? ' disabled' : ''; ?>>
+              </div>
+              <div class="flm-field">
+                <label for="flm-cron-interval-unit">周期单位</label>
+                <select id="flm-cron-interval-unit" name="cron_interval_unit"<?php echo $cronDisabled ? ' disabled' : ''; ?>>
+                  <?php foreach ($cronUnits as $unit => $config): ?>
+                    <option value="<?php echo $unit; ?>" data-min="<?php echo (int) $config['min']; ?>" data-max="<?php echo (int) $config['max']; ?>"<?php echo $cronIntervalUnit === $unit ? ' selected' : ''; ?>><?php echo flm_e($config['label']); ?></option>
+                  <?php endforeach; ?>
+                </select>
+              </div>
+              <div class="flm-field">
+                <label for="flm-cli-worker-limit">每批处理条数</label>
+                <input id="flm-cli-worker-limit" type="number" name="cli_worker_limit" min="1" max="500" value="<?php echo (int) $settings['cli_worker_limit']; ?>"<?php echo $cronDisabled ? ' disabled' : ''; ?>>
+              </div>
+              <div class="flm-field">
+                <label for="flm-cli-worker-max-seconds">单次运行预算（秒）</label>
+                <input id="flm-cli-worker-max-seconds" type="number" name="cli_worker_max_seconds" min="30" max="3600" value="<?php echo (int) $settings['cli_worker_max_seconds']; ?>"<?php echo $cronDisabled ? ' disabled' : ''; ?>>
+              </div>
+            </div>
+            <p class="flm-help">秒单位最小 60；月按 30 天折算。系统 Cron 每分钟唤醒，仅在设定周期到期时执行。</p>
+            <?php if ($cronDisabled): ?>
+              <p class="flm-help">当前环境无法由插件管理系统任务，请按 README 手工配置 CLI Cron，或使用签名 HTTP Worker。环境修复后，停用并重新启用插件可重新探测。</p>
+            <?php else: ?>
+              <p class="flm-help">PHP CLI 路径、crontab 路径和原始命令由插件自动管理，不接受后台输入。</p>
+            <?php endif; ?>
+          </section>
+
           <section class="flm-settings-panel" role="tabpanel" data-flm-settings-panel="worker" hidden>
             <h3>签名 HTTP Worker</h3>
             <label class="flm-check">
@@ -229,7 +308,7 @@ $workerUrl = Router::url('friendlinks-worker', [], $options->index);
           </section>
 
           <div class="flm-settings-actions">
-            <button class="btn primary" type="submit">保存设置</button>
+            <button class="btn primary" type="submit" data-flm-settings-save>保存设置</button>
           </div>
         </form>
       </div>

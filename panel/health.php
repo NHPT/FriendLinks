@@ -3,7 +3,6 @@
 use TypechoPlugin\FriendLinks\Application\Settings;
 use TypechoPlugin\FriendLinks\Infrastructure\MigrationManager;
 use TypechoPlugin\FriendLinks\Infrastructure\Repositories;
-use TypechoPlugin\FriendLinks\Infrastructure\SystemCronManager;
 use TypechoPlugin\FriendLinks\Presentation\StatusLabels;
 
 require __DIR__ . '/_bootstrap.php';
@@ -22,16 +21,6 @@ try {
 } catch (\Throwable $error) {
     $pageError = $error->getMessage();
 }
-$cronStatus = null;
-$cronError = null;
-try {
-    $cronStatus = (new SystemCronManager())->inspect();
-    if (empty($cronStatus['installed'])) {
-        $cronError = '未检测到 FriendLinks 自动 Cron，请重新启用插件以恢复。';
-    }
-} catch (\Throwable $error) {
-    $cronError = $error->getMessage();
-}
 ?>
 <div class="main flm-admin">
   <div class="body container">
@@ -48,14 +37,6 @@ try {
           <div class="flm-stat"><strong><?php echo $backlog['due']; ?></strong><span>到期任务</span></div>
           <div class="flm-stat"><strong><?php echo $backlog['leased']; ?></strong><span>租约中</span></div>
         </div>
-
-        <h3>自动定时任务</h3>
-        <?php if ($cronError): ?>
-          <p class="flm-warning"><?php echo flm_e($cronError); ?></p>
-        <?php else: ?>
-          <p>系统 Cron 已启用，每 5 分钟自动执行检测和通知队列。</p>
-          <p class="flm-help">该任务由插件管理；停用或卸载 FriendLinks 时会自动删除。</p>
-        <?php endif; ?>
 
         <h3>运行状态</h3>
         <p>Schema 版本：<?php echo (new MigrationManager())->version(); ?>；

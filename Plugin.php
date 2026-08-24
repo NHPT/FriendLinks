@@ -4,10 +4,12 @@ namespace TypechoPlugin\FriendLinks;
 
 use Typecho\Common;
 use Typecho\Db;
+use Typecho\Plugin as TypechoPluginRegistry;
 use Typecho\Plugin\PluginInterface;
 use Typecho\Widget\Helper\Form;
 use Typecho\Widget\Helper\Layout;
 use TypechoPlugin\FriendLinks\Application\Settings;
+use TypechoPlugin\FriendLinks\Infrastructure\CronUnavailableException;
 use TypechoPlugin\FriendLinks\Infrastructure\Database;
 use TypechoPlugin\FriendLinks\Infrastructure\MigrationManager;
 use TypechoPlugin\FriendLinks\Infrastructure\SystemCronManager;
@@ -21,14 +23,18 @@ require_once __DIR__ . '/vendor/autoload.php';
  *
  * @package FriendLinks
  * @author NHPT
- * @version 0.2.4
+ * @version 1.0.0
  * @since 1.2.0
  * @link https://github.com/NHPT/FriendLinks
  */
 final class Plugin implements PluginInterface
 {
-    private const MENU_NAME = '友情链接 · FriendLinks';
+    // Typecho uses the visible label as the removal key. The trailing space is
+    // collapsed by HTML while keeping this plugin distinct from legacy menus.
+    private const MENU_NAME = '友情链接 ';
+    private const LEGACY_MENU_NAME = '友情链接 · FriendLinks';
     private const MENU_INDEX_OPTION = 'friendlinks_menu_index';
+    private const MENU_NAME_OPTION = 'friendlinks_menu_name';
     private const SETTINGS_BACKUP_OPTION = 'friendlinks_settings_backup';
     private const ACTION_NAME = 'friendlinks';
     private const ROUTE_NAME = 'friendlinks-worker';
@@ -58,6 +64,7 @@ final class Plugin implements PluginInterface
 
         $menuIndex = null;
         $cron = new SystemCronManager();
+        $cronWarning = null;
         try {
             $menuIndex = self::registerAdminRegistration();
             self::registerEndpoints();
@@ -66,7 +73,11 @@ final class Plugin implements PluginInterface
             \Widget\Base\Contents::pluginHandle()->contentEx = [__CLASS__, 'injectLinks'];
             \Widget\Archive::pluginHandle()->header = [__CLASS__, 'frontendHeader'];
 
-            $cron->install();
+            try {
+                $cron->install();
+            } catch (CronUnavailableException $error) {
+                $cronWarning = $error->getMessage();
+            }
         } catch (\Throwable $error) {
             try {
                 $cron->remove();
@@ -87,7 +98,10 @@ final class Plugin implements PluginInterface
             throw new \Typecho\Plugin\Exception('FriendLinks 启用失败：' . $error->getMessage());
         }
 
-        return 'FriendLinks 已启用，系统 Cron 已自动安装并每 5 分钟运行。';
+        return null === $cronWarning
+            ? 'FriendLinks 已启用，系统 Cron 已自动安装。'
+            : 'FriendLinks 已启用，但无法自动安装 Cron：' . $cronWarning
+                . ' 请按 README 手工配置定时任务。';
     }
 
     public static function deactivate()
@@ -96,7 +110,7 @@ final class Plugin implements PluginInterface
         $cronRemoved = false;
         try {
             self::backupSettings();
-            $cron->remove();
+            $cron->removeAndClear();
             $cronRemoved = true;
             self::removeAdminRegistration();
             Helper::removeAction(self::ACTION_NAME);
@@ -118,6 +132,36 @@ final class Plugin implements PluginInterface
         }
 
         return 'FriendLinks 已停用，系统 Cron 已删除，业务数据仍保留。';
+    }
+
+    public static function uninstall(): void
+    {
+        $registry = TypechoPluginRegistry::export();
+        self::deactivate();
+
+        try {
+            TypechoPluginRegistry::deactivate('FriendLinks');
+            self::persistPluginRegistry(TypechoPluginRegistry::export());
+        } catch (\Throwable $error) {
+            $rollbackErrors = [];
+            TypechoPluginRegistry::init($registry);
+            try {
+                self::persistPluginRegistry($registry);
+            } catch (\Throwable $rollback) {
+                $rollbackErrors[] = $rollback->getMessage();
+            }
+            try {
+                self::restoreAfterFailedDeactivation(new SystemCronManager());
+            } catch (\Throwable $rollback) {
+                $rollbackErrors[] = $rollback->getMessage();
+            }
+
+            $message = 'FriendLinks 注销失败：' . $error->getMessage();
+            if ($rollbackErrors) {
+                $message .= '；回滚失败：' . implode('；', $rollbackErrors);
+            }
+            throw new \RuntimeException($message, 0, $error);
+        }
     }
 
     public static function config(Form $form)
@@ -257,7 +301,10 @@ final class Plugin implements PluginInterface
         return is_array($settings) ? $settings : null;
     }
 
-    private static function removeAdminRegistration(?int $menuIndex = null): void
+    private static function removeAdminRegistration(
+        ?int $menuIndex = null,
+        ?string $menuName = null
+    ): void
     {
         $database = new Database();
         $db = $database->native();
@@ -268,38 +315,59 @@ final class Plugin implements PluginInterface
                 ? (int) $row['value']
                 : null;
         }
+        if (null !== $menuIndex && null === $menuName) {
+            $row = $database->fetchRowWrite($db->select('value')->from('table.options')
+                ->where('name = ?', self::MENU_NAME_OPTION)->where('user = ?', 0)->limit(1));
+            $storedName = $row ? (string) $row['value'] : self::LEGACY_MENU_NAME;
+            if (in_array($storedName, [self::MENU_NAME, self::LEGACY_MENU_NAME], true)) {
+                $menuName = $storedName;
+            }
+        }
 
+        if (null !== $menuIndex && null === $menuName) {
+            throw new \RuntimeException('FriendLinks 菜单清理标识无效，已拒绝继续。');
+        }
         if (null !== $menuIndex) {
             foreach (self::PANELS as $panel) {
                 Helper::removePanel($menuIndex, $panel);
             }
-            Helper::removeMenu(self::MENU_NAME);
+            Helper::removeMenu($menuName);
         }
         $db->query($db->delete('table.options')
             ->where('name = ?', self::MENU_INDEX_OPTION)->where('user = ?', 0));
+        $db->query($db->delete('table.options')
+            ->where('name = ?', self::MENU_NAME_OPTION)->where('user = ?', 0));
     }
 
     private static function registerAdminRegistration(): int
     {
         $menuIndex = Helper::addMenu(self::MENU_NAME);
-        self::saveMenuIndex($menuIndex);
-        Helper::addPanel(
-            $menuIndex,
-            self::PANELS[0],
-            '友链',
-            '友链管理',
-            'administrator',
-            false,
-            'extending.php?panel=FriendLinks/panel/link-edit.php'
-        );
-        Helper::addPanel($menuIndex, self::PANELS[1], '编辑友链', '编辑友链', 'administrator', true);
-        Helper::addPanel($menuIndex, self::PANELS[2], '分类', '友链分类', 'administrator');
-        Helper::addPanel($menuIndex, self::PANELS[3], '健康', '检测健康总览', 'administrator');
-        Helper::addPanel($menuIndex, self::PANELS[4], '历史', '检测历史', 'administrator');
-        Helper::addPanel($menuIndex, self::PANELS[5], '导入导出', '导入导出', 'administrator');
-        Helper::addPanel($menuIndex, self::PANELS[6], '通知', '通知设置与投递记录', 'administrator');
-        Helper::addPanel($menuIndex, self::PANELS[7], '设置', 'FriendLinks 设置', 'administrator');
-        return $menuIndex;
+        try {
+            self::saveMenuIndex($menuIndex);
+            Helper::addPanel(
+                $menuIndex,
+                self::PANELS[0],
+                '友链',
+                '友链管理',
+                'administrator',
+                false,
+                'extending.php?panel=FriendLinks/panel/link-edit.php'
+            );
+            Helper::addPanel($menuIndex, self::PANELS[1], '编辑友链', '编辑友链', 'administrator', true);
+            Helper::addPanel($menuIndex, self::PANELS[2], '分类', '友链分类', 'administrator');
+            Helper::addPanel($menuIndex, self::PANELS[3], '健康', '检测健康总览', 'administrator');
+            Helper::addPanel($menuIndex, self::PANELS[4], '历史', '检测历史', 'administrator');
+            Helper::addPanel($menuIndex, self::PANELS[5], '导入导出', '导入导出', 'administrator');
+            Helper::addPanel($menuIndex, self::PANELS[6], '通知', '通知设置与投递记录', 'administrator');
+            Helper::addPanel($menuIndex, self::PANELS[7], '设置', 'FriendLinks 设置', 'administrator');
+            return $menuIndex;
+        } catch (\Throwable $error) {
+            try {
+                self::removeAdminRegistration($menuIndex, self::MENU_NAME);
+            } catch (\Throwable $ignored) {
+            }
+            throw $error;
+        }
     }
 
     private static function registerEndpoints(): void
@@ -321,10 +389,34 @@ final class Plugin implements PluginInterface
         $db = Db::get();
         $db->query($db->delete('table.options')
             ->where('name = ?', self::MENU_INDEX_OPTION)->where('user = ?', 0));
+        $db->query($db->delete('table.options')
+            ->where('name = ?', self::MENU_NAME_OPTION)->where('user = ?', 0));
         $db->query($db->insert('table.options')->rows([
             'name' => self::MENU_INDEX_OPTION,
             'user' => 0,
             'value' => (string) $menuIndex,
         ]));
+        $db->query($db->insert('table.options')->rows([
+            'name' => self::MENU_NAME_OPTION,
+            'user' => 0,
+            'value' => self::MENU_NAME,
+        ]));
+    }
+
+    private static function persistPluginRegistry(array $registry): void
+    {
+        $database = new Database();
+        $db = $database->native();
+        $value = serialize($registry);
+        $db->query($db->update('table.options')->rows(['value' => $value])
+            ->where('name = ?', 'plugins')
+            ->where('user = ?', 0));
+        $row = $database->fetchRowWrite($db->select('value')->from('table.options')
+            ->where('name = ?', 'plugins')
+            ->where('user = ?', 0)
+            ->limit(1));
+        if (!$row || !hash_equals($value, (string) $row['value'])) {
+            throw new \RuntimeException('无法持久化 Typecho 插件注册状态。');
+        }
     }
 }
