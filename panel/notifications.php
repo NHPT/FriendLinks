@@ -63,7 +63,6 @@ $placeholders = array_map(static function ($name) {
             <label for="flm-notification-cooldown">同类通知冷却时间（秒）</label>
             <input id="flm-notification-cooldown" type="number" name="notification_cooldown" min="300" max="604800" value="<?php echo (int) $settings['notification_cooldown']; ?>">
             <p class="flm-help">同一友链、同一事件和同一渠道在冷却时间内只创建一条通知，默认 3600 秒。</p>
-            <button class="btn flm-notification-action flm-notification-queue" type="submit" formaction="<?php echo flm_e(flm_action_url('dispatch-notifications')); ?>" formnovalidate<?php echo empty($settings['notifications_enabled']) ? ' disabled' : ''; ?>>立即处理队列</button>
           </section>
 
           <section class="flm-notification-panel" data-flm-notification-panel="webhook" hidden>
@@ -78,7 +77,6 @@ $placeholders = array_map(static function ($name) {
               <label class="flm-check"><input type="checkbox" name="clear_webhook_url" value="1"> 清除已保存的地址</label>
               <label class="flm-check"><input type="checkbox" name="clear_webhook_secret" value="1"> 清除已保存的密钥</label>
             </div>
-            <button class="btn flm-notification-action flm-notification-test" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'webhook'])); ?>" formnovalidate data-flm-notification-test="webhook">发送测试消息</button>
           </section>
 
           <section class="flm-notification-panel" data-flm-notification-panel="dingtalk" hidden>
@@ -92,7 +90,6 @@ $placeholders = array_map(static function ($name) {
               <label class="flm-check"><input type="checkbox" name="clear_dingtalk_webhook_url" value="1"> 清除已保存的地址</label>
               <label class="flm-check"><input type="checkbox" name="clear_dingtalk_secret" value="1"> 清除已保存的密钥</label>
             </div>
-            <button class="btn flm-notification-action flm-notification-test" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'dingtalk'])); ?>" formnovalidate data-flm-notification-test="dingtalk">发送测试消息</button>
           </section>
 
           <section class="flm-notification-panel" data-flm-notification-panel="email" hidden>
@@ -134,7 +131,6 @@ $placeholders = array_map(static function ($name) {
             <label for="flm-email-recipients">收件地址</label>
             <input id="flm-email-recipients" type="text" name="email_recipients" value="<?php echo flm_e($settings['email_recipients']); ?>" placeholder="admin@example.com, ops@example.com">
             <p class="flm-help">最多 20 个地址，使用逗号、分号或空格分隔。填写用户名或密码时必须使用 STARTTLS 或 SMTPS。</p>
-            <button class="btn flm-notification-action flm-notification-test" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'email'])); ?>" formnovalidate data-flm-notification-test="email">发送测试消息</button>
           </section>
 
           <section class="flm-notification-panel" data-flm-notification-panel="template" hidden>
@@ -147,8 +143,12 @@ $placeholders = array_map(static function ($name) {
             <p class="flm-help">模板仅执行变量替换，不执行 HTML、PHP 或表达式。邮件和钉钉均发送纯文本。</p>
           </section>
 
-          <div class="flm-form-actions">
+          <div class="flm-form-actions flm-notification-actions">
             <button class="btn primary" type="submit">保存通知设置</button>
+            <button class="btn flm-notification-action flm-notification-queue" type="submit" formaction="<?php echo flm_e(flm_action_url('dispatch-notifications')); ?>" formnovalidate<?php echo empty($settings['notifications_enabled']) ? ' disabled' : ''; ?>>立即处理队列</button>
+            <button class="btn flm-notification-action flm-notification-test" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'webhook'])); ?>" formnovalidate data-flm-notification-test="webhook" hidden>发送测试消息</button>
+            <button class="btn flm-notification-action flm-notification-test" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'dingtalk'])); ?>" formnovalidate data-flm-notification-test="dingtalk" hidden>发送测试消息</button>
+            <button class="btn flm-notification-action flm-notification-test" type="submit" formaction="<?php echo flm_e(flm_action_url('test-notification', ['channel' => 'email'])); ?>" formnovalidate data-flm-notification-test="email" hidden>发送测试消息</button>
           </div>
         </form>
 

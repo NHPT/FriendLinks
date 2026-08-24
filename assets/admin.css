@@ -305,10 +305,6 @@
   min-height: 260px;
 }
 
-.flm-admin .flm-notification-panel > .btn {
-  margin-top: 16px;
-}
-
 .flm-admin .flm-notification-action {
   background: #467b96;
   border-color: #3d6d85;
@@ -331,6 +327,11 @@
   border-color: #d9d9d9;
   color: #8a8f99;
   cursor: not-allowed;
+}
+
+.flm-admin .flm-notification-actions {
+  gap: 10px;
+  justify-content: flex-start;
 }
 
 .flm-admin .flm-settings-form {
