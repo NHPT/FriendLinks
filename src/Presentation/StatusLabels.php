@@ -43,7 +43,6 @@ final class StatusLabels
         'domain_unknown' => '域名状态未知',
         'domain_unsupported' => '暂不支持此域名后缀',
         'domain_not_applicable' => '不适用域名检测',
-        'data_stale' => '检测数据已过期',
         'worker_error' => '检测尚无结论',
     ];
 

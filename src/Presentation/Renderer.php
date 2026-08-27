@@ -55,18 +55,6 @@ final class Renderer
         $state = (string) ($link['overall_state'] ?: 'pending');
         $reason = (string) ($link['reason_code'] ?? '');
         $checkedAt = (int) ($link['checked_at'] ?? 0);
-        $freshnessInterval = max(
-            (int) $settings['http_interval'],
-            Settings::cronIntervalSeconds($settings)
-        );
-        if (
-            !in_array($state, ['pending', 'disabled'], true)
-            && $checkedAt > 0
-            && $checkedAt < time() - (2 * $freshnessInterval)
-        ) {
-            $state = 'unknown';
-            $reason = 'data_stale';
-        }
         if (!isset(StatusLabels::states()[$state])) {
             $state = 'unknown';
         }

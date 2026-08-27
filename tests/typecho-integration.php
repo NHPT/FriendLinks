@@ -1118,39 +1118,25 @@ $disabledHtml = (new Renderer())->render([[
 ]], 'cards');
 $check(
     false !== strpos($disabledHtml, 'flm-item-state-disabled'),
-    'disabled status is not replaced by stale-data state'
+    'disabled status remains visible regardless of detection time'
 );
-$rendererSettings = Settings::all();
-$weeklySettings = $rendererSettings;
-$weeklySettings['http_interval'] = 21600;
-$weeklySettings['cron_interval_value'] = 1;
-$weeklySettings['cron_interval_unit'] = 'weeks';
-Settings::save($weeklySettings);
-$weeklyStatusLink = [[
-    'name' => 'Weekly status',
-    'url' => 'https://example.com/weekly',
+$lastKnownStatusHtml = (new Renderer())->render([[
+    'name' => 'Last known status',
+    'url' => 'https://example.com/last-known',
     'description' => '',
     'logo_url' => '',
     'category_name' => null,
     'category_slug' => null,
     'overall_state' => 'healthy',
     'reason_code' => null,
-    'checked_at' => time() - (3 * 86400),
-]];
-$weeklyStatusHtml = (new Renderer())->render($weeklyStatusLink, 'cards');
+    'checked_at' => time() - (365 * 86400),
+]], 'cards');
 $check(
-    false !== strpos($weeklyStatusHtml, 'flm-item-state-healthy')
-        && false === strpos($weeklyStatusHtml, '检测数据已过期'),
-    'frontend freshness respects a weekly CLI schedule'
+    false !== strpos($lastKnownStatusHtml, 'flm-item-state-healthy')
+        && false !== strpos($lastKnownStatusHtml, '>正常<')
+        && false === strpos($lastKnownStatusHtml, 'flm-item-state-unknown'),
+    'frontend preserves the last persisted health state until a new result is stored'
 );
-$weeklyStatusLink[0]['checked_at'] = time() - (15 * 86400);
-$expiredWeeklyStatusHtml = (new Renderer())->render($weeklyStatusLink, 'cards');
-$check(
-    false !== strpos($expiredWeeklyStatusHtml, 'flm-item-state-unknown')
-        && false !== strpos($expiredWeeklyStatusHtml, '检测数据已过期'),
-    'frontend marks data stale only after two effective scheduling intervals'
-);
-Settings::save($rendererSettings);
 
 $token = str_repeat('a', 32);
 $leaseNow = time();

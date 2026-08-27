@@ -648,7 +648,6 @@ domain_unknown
 domain_unsupported
 domain_not_applicable
 domain_not_found
-data_stale
 worker_error
 ```
 
@@ -662,7 +661,7 @@ worker_error
 6. 401、403 表示目标存在，默认产生 `degraded`；可配置为 `healthy`，但不能产生 `down`。
 7. 辅助组件 `unknown` 不覆盖已确认的主链路成功。
 8. 所有组件都没有结论时才使用整体 `unknown`。
-9. 主要检测数据超过两倍有效检测周期仍未更新时，公开状态临时计算为 `unknown`，原结果只在管理端保留为“上次已知状态”。有效检测周期取 HTTP 检测间隔与 CLI Worker 调度周期中的较大值，避免低频调度下提前判定数据过期。
+9. `flm_current_status.overall_state` 是前后台唯一健康状态来源。最近一次完整检测结果持续有效，只有后续检测完成并成功写入后才更新；`checked_at` 仅表示检测时间，不参与状态计算。
 
 多个异常同时存在时按 `down`、`degraded`、`warning`、`healthy` 的顺序决定整体状态；主要原因按 DNS/SSRF、TLS、HTTP、域名注册的顺序选择，其余原因保留在组件详情中。
 
@@ -891,7 +890,7 @@ SHA-256(body)
 | 缺少 intl | 非 ASCII 域名检测禁用，ASCII 域名正常 |
 | RDAP 不支持该后缀 | 域名状态 `unsupported`，不影响主链路状态 |
 | 系统 CA 异常 | TLS 明确标记为运行环境错误，不允许关闭验证 |
-| Cron 长期未运行 | 前台显示缓存状态，后台告警“检测数据已过期” |
+| Cron 长期未运行 | 前后台保留最近一次完整检测状态，CLI Worker 设置页根据最近运行时间提示调度异常 |
 | 单个探测器异常 | 记录组件错误，其他探测器继续，Worker 不整体崩溃 |
 | 数据库租约残留 | 到期后自动恢复 |
 | 通知渠道失败 | 检测结果照常提交，Outbox 指数退避并最多尝试五次 |
@@ -905,7 +904,7 @@ SHA-256(body)
 - 待检测、租约中和过期任务数量。
 - 最近运行成功数、失败数、耗时。
 - RDAP 限流次数。
-- 状态数据新鲜度。
+- 各状态最近检测时间。
 - 最近迁移版本。
 - 通知待发送、失败、已发送数量和最近错误摘要。
 
