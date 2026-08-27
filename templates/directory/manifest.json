@@ -1,4 +1,5 @@
 {
+  "schema": 1,
   "title": "站点目录",
   "description": "弱化卡片边界并强化描述，简短状态与标题在顶部对齐。",
   "layout": "directory"

@@ -143,7 +143,7 @@ $workerUrl = Router::url('friendlinks-worker', [], $options->index);
                     </option>
                   <?php endforeach; ?>
                 </select>
-                <p class="flm-help">只改变插件根节点内的布局，不执行模板 PHP 或 JavaScript。</p>
+                <p class="flm-help">模板在隔离组件内控制完整布局，不执行 PHP、自定义 HTML 或 JavaScript。</p>
               </div>
             </div>
 

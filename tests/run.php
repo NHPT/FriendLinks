@@ -211,10 +211,31 @@ check(
 );
 
 $templates = (new TemplateCatalog())->all();
-check(5 === count($templates), 'five bundled presentation templates are available');
 foreach (['cards', 'compact', 'logo-grid', 'directory', 'minimal'] as $template) {
     check(isset($templates[$template]), 'bundled template is available: ' . $template);
+    check(
+        null !== (new TemplateCatalog())->stylesheetPath($templates[$template]),
+        'bundled template owns its stylesheet: ' . $template
+    );
 }
+$customTemplateRoot = sys_get_temp_dir() . '/friendlinks-template-' . bin2hex(random_bytes(6));
+mkdir($customTemplateRoot . '/contributor-grid', 0777, true);
+file_put_contents($customTemplateRoot . '/contributor-grid/manifest.json', json_encode([
+    'schema' => 1,
+    'title' => 'Contributor grid',
+    'description' => 'Fixture',
+    'layout' => 'contributor-grid',
+]));
+file_put_contents(
+    $customTemplateRoot . '/contributor-grid/style.css',
+    '.flm-root.flm-template-contributor-grid{display:block}'
+);
+$customCatalog = new TemplateCatalog($customTemplateRoot);
+check($customCatalog->exists('contributor-grid'), 'contributor templates are discovered without a core allowlist');
+unlink($customTemplateRoot . '/contributor-grid/style.css');
+unlink($customTemplateRoot . '/contributor-grid/manifest.json');
+rmdir($customTemplateRoot . '/contributor-grid');
+rmdir($customTemplateRoot);
 check(!(new TemplateCatalog())->exists('../invalid'), 'invalid template identifier is rejected');
 check(
     (string) filemtime(__FILE__) === AssetVersion::forFile(__FILE__),

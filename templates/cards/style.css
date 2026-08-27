@@ -1,0 +1,153 @@
+.flm-root.flm-template-cards .flm-list {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr));
+}
+
+.flm-root.flm-template-cards .flm-item {
+  display: grid;
+  column-gap: 12px;
+  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-rows: 22px minmax(22px, auto) auto;
+  min-height: 86px;
+  padding: 12px 14px;
+  position: relative;
+  row-gap: 3px;
+}
+
+.flm-root.flm-template-cards .flm-link {
+  display: contents;
+}
+
+.flm-root.flm-template-cards .flm-logo {
+  align-self: start;
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  height: 44px;
+  justify-self: center;
+  width: 44px;
+}
+
+.flm-root.flm-template-cards .flm-copy {
+  display: contents;
+}
+
+.flm-root.flm-template-cards .flm-name {
+  align-self: end;
+  grid-column: 2;
+  grid-row: 1;
+  font-size: 0.95rem;
+  line-height: 1.2;
+}
+
+.flm-root.flm-template-cards .flm-description {
+  align-self: start;
+  grid-column: 2;
+  grid-row: 2;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  margin-top: 0;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.flm-root.flm-template-cards .flm-meta {
+  display: contents;
+}
+
+.flm-root.flm-template-cards .flm-status {
+  display: contents;
+}
+
+.flm-root.flm-template-cards .flm-status-summary {
+  align-self: start;
+  font-size: 0.66rem;
+  gap: 0.25rem;
+  grid-column: 1;
+  grid-row: 3;
+  justify-content: center;
+  justify-self: center;
+  line-height: 1.35;
+  margin-top: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.flm-root.flm-template-cards .flm-status-short {
+  display: inline;
+}
+
+.flm-root.flm-template-cards .flm-status-detail {
+  align-self: start;
+  display: block;
+  font-size: 0.68rem;
+  grid-column: 2;
+  grid-row: 2;
+  line-height: 1.35;
+  opacity: 0;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  text-overflow: clip;
+  transform: translateY(3px);
+  transition: opacity 160ms ease, transform 160ms ease;
+  white-space: normal;
+}
+
+.flm-root.flm-template-cards .flm-checked {
+  display: none;
+}
+
+.flm-root.flm-template-cards .flm-link:focus-visible {
+  outline: none;
+}
+
+.flm-root.flm-template-cards .flm-item:focus-within {
+  outline: 2px solid var(--flm-accent-border);
+  outline-offset: 2px;
+}
+
+@media (min-width: 768px) {
+  .flm-root.flm-template-cards .flm-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .flm-root.flm-template-cards .flm-item:hover,
+  .flm-root.flm-template-cards .flm-item:focus-within {
+    background: var(--flm-accent-soft);
+    border-color: var(--flm-accent-border);
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.09);
+    transform: translateY(-2px);
+  }
+
+  .flm-root.flm-template-cards .flm-item:hover .flm-name,
+  .flm-root.flm-template-cards .flm-item:focus-within .flm-name {
+    color: var(--flm-accent);
+  }
+
+  .flm-root.flm-template-cards .flm-item:hover .flm-description,
+  .flm-root.flm-template-cards .flm-item:focus-within .flm-description {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  .flm-root.flm-template-cards .flm-item:hover .flm-status-detail,
+  .flm-root.flm-template-cards .flm-item:focus-within .flm-status-detail {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flm-root.flm-template-cards .flm-item,
+  .flm-root.flm-template-cards .flm-description,
+  .flm-root.flm-template-cards .flm-status-detail {
+    transition: none;
+  }
+
+  .flm-root.flm-template-cards .flm-item:hover,
+  .flm-root.flm-template-cards .flm-item:focus-within {
+    transform: none;
+  }
+}

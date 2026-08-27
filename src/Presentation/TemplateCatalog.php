@@ -5,7 +5,7 @@ namespace TypechoPlugin\FriendLinks\Presentation;
 final class TemplateCatalog
 {
     private const DEFAULT_TEMPLATE = 'cards';
-    private const ALLOWED_LAYOUTS = ['cards', 'compact', 'logo-grid', 'directory', 'minimal'];
+    private const SCHEMA_VERSION = 1;
 
     /** @var string */
     private $root;
@@ -40,18 +40,26 @@ final class TemplateCatalog
                 continue;
             }
 
-            $layout = (string) ($manifest['layout'] ?? '');
+            $schema = (int) ($manifest['schema'] ?? self::SCHEMA_VERSION);
+            $layout = (string) ($manifest['layout'] ?? $id);
             $title = trim((string) ($manifest['title'] ?? ''));
-            if (!in_array($layout, self::ALLOWED_LAYOUTS, true) || '' === $title) {
+            $stylesheetPath = $directory . '/style.css';
+            if (
+                self::SCHEMA_VERSION !== $schema
+                || !$this->isValidIdentifier($layout)
+                || '' === $title
+                || !is_file($stylesheetPath)
+            ) {
                 continue;
             }
 
             $templates[$id] = [
                 'id' => $id,
+                'schema' => $schema,
                 'title' => $title,
                 'description' => trim((string) ($manifest['description'] ?? '')),
                 'layout' => $layout,
-                'stylesheet' => is_file($directory . '/style.css') ? 'style.css' : null,
+                'stylesheet' => 'style.css',
             ];
         }
 
@@ -70,10 +78,11 @@ final class TemplateCatalog
 
         return [
             'id' => self::DEFAULT_TEMPLATE,
+            'schema' => self::SCHEMA_VERSION,
             'title' => '卡片网格',
             'description' => '',
             'layout' => 'cards',
-            'stylesheet' => null,
+            'stylesheet' => 'style.css',
         ];
     }
 
@@ -90,5 +99,10 @@ final class TemplateCatalog
 
         $path = $this->root . '/' . $template['id'] . '/' . $template['stylesheet'];
         return is_file($path) ? $path : null;
+    }
+
+    private function isValidIdentifier(string $value): bool
+    {
+        return 1 === preg_match('/^[a-z0-9][a-z0-9-]{0,31}$/', $value);
     }
 }

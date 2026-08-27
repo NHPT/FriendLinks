@@ -15,7 +15,7 @@ FriendLinks 不依赖主题的友链模板，也不会在访客请求中临时�
 
 | 能力 | 说明 |
 | --- | --- |
-| 主题解耦 | 使用普通独立页面和 Typecho 标准钩子，不要求主题提供 `page-links.php` 或专用函数 |
+| 主题解耦 | 使用普通独立页面和 Shadow DOM 隔离展示，不要求主题提供 `page-links.php`、专用函数或兼容 CSS |
 | 独立管理 | 友链、分类、健康、历史、导入导出、通知和设置均位于独立后台菜单 |
 | 多维检测 | DNS、HTTP、重定向、TLS 证书、域名 RDAP 到期信息 |
 | 自动调度 | 环境支持时自动安装 Linux 用户 Cron，停用或卸载时精确删除 |
@@ -81,9 +81,9 @@ Logo 方阵用于更强调站点标识的页面：隐藏描述，右上角仅保
 - 类型为独立页面并且已经发布。
 - 没有访问密码。
 - 使用主题的普通页面模板。
-- 主题按 Typecho 规范调用 `$this->content()` 和 `$this->header()`。
+- 主题按 Typecho 规范输出正文和页脚。
 
-插件按页面 CID 在正文后追加友链列表，不修改主题文件。更换符合 Typecho 规范的主题后，友链数据、检测任务和通知配置不会丢失。
+插件按页面 CID 在正文后追加友链组件，不修改主题文件。组件内部使用 Shadow DOM 隔离主题针对 `ul`、`li`、`a`、`img` 等元素的样式；主题定义的 `--theme-surface`、`--theme-border`、`--theme-text`、`--theme-link` 等公开变量仍可用于配色适配。更换符合 Typecho 规范的主题后，友链数据、检测任务、通知配置和组件布局不会丢失。
 
 ## 定时检测
 
@@ -421,7 +421,7 @@ Excel 或 WPS 导入时应明确选择 UTF-8，不要直接以本地 ANSI 编码
 
 ## 展示模板扩展
 
-模板应安装到插件目录下的 `FriendLinks/templates/<name>/`。目录结构：
+项目贡献者新增模板时，在源码的 `FriendLinks/templates/<name>/` 下提交完整模板目录。正式发布包统一包含审核通过的模板，普通用户只需在后台选择，不需要手工安装或配置模板参数。目录结构：
 
 ```text
 templates/my-layout/
@@ -433,15 +433,18 @@ templates/my-layout/
 
 ```json
 {
+  "schema": 1,
   "title": "我的布局",
-  "description": "继承卡片语义并调整颜色和间距。",
-  "layout": "cards"
+  "description": "独立控制友链的布局、字段显隐和交互样式。",
+  "layout": "my-layout"
 }
 ```
 
-`layout` 只能使用 `cards`、`compact`、`logo-grid`、`directory` 或 `minimal`。模板只包含 JSON 清单和隔离 CSS，不执行 PHP、自定义 HTML 或 JavaScript。
+目录名和 `layout` 必须由小写字母、数字与连字符组成，最长 32 个字符。`layout` 可复用现有布局名，也可以定义新的安全样式标识，不受内置模板白名单限制；`style.css` 是必需文件。模板 CSS 必须限定在 `.flm-root.flm-template-<name>` 内，并完整声明该模板的列表布局。模板只能使用固定、已转义的友链 DOM，不执行 PHP、自定义 HTML 或 JavaScript。
 
-加入目录后刷新“友情链接 → 设置”，新模板会自动出现在“前台布局”下拉框和预览区域。主题可覆盖 `.flm-root` 上的公开 CSS 变量调整配色。插件不检测主题名称，也不包含特定主题分支。
+加入目录后刷新“友情链接 → 设置”，新模板会自动出现在“前台布局”下拉框和预览区域。用户只需选择模板，不需要配置模板内部参数。前台只加载公共基础样式和当前模板的 `style.css`；主题 CSS 无法进入 Shadow DOM，只有继承的字体、系统明暗模式和公开 CSS 变量参与主题适配。插件不检测主题名称，也不包含特定主题分支。
+
+`assets/frontend.css` 只维护颜色变量、状态、可访问性和共享元素样式。每个模板负责自己的布局、响应式规则、字段显隐和悬停表现，内置的卡片网格也遵循相同目录约定。新增模板不需要修改 PHP 白名单或模板数量测试，但提交前仍应验证桌面和移动端预览。
 
 ## 安全设计
 
@@ -532,7 +535,7 @@ GitHub Actions 会在 `main`、Pull Request、每周计划任务和手工触发�
 - `composer audit`
 - PHP 语法检查
 - `tests/run.php` 领域测试
-- `assets/admin.js` 语法检查
+- `assets/admin.js`、`assets/frontend.js` 语法检查
 - 本机路径、调试标记和常见密钥格式扫描
 
 发布 `v*` 标签会触发 Release 工作流，自动打包包含 `vendor/` 的 `FriendLinks-vX.Y.Z.zip` 并创建 GitHub Release 页面。已经存在的标签也可以在 GitHub Actions 页面手工执行 `Release` 工作流并输入 tag 补建 Release。
@@ -541,7 +544,7 @@ GitHub Actions 会在 `main`、Pull Request、每周计划任务和手工触发�
 
 ### 启用后前台没有列表
 
-确认已经在“友情链接 → 设置”绑定已发布的普通独立页面，并检查主题是否调用 `$this->content()` 和 `$this->header()`。
+确认已经在“友情链接 → 设置”绑定已发布的普通独立页面，并检查主题是否输出正文或调用 `$this->footer()`。前端组件将基础样式与当前模板样式放入 Shadow DOM；即使主题为正文列表定义了高优先级样式，也不会改变友链布局。
 
 ### 为什么自动 Cron 不可用
 

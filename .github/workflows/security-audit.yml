@@ -58,7 +58,9 @@ jobs:
           node-version: '20'
 
       - name: Check JavaScript syntax
-        run: node --check assets/admin.js
+        run: |
+          node --check assets/admin.js
+          node --check assets/frontend.js
 
       - name: Scan for local debug and secret markers
         shell: bash

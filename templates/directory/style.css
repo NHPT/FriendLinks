@@ -1,8 +1,10 @@
-.flm-root.flm-layout-directory .flm-list {
+.flm-root.flm-template-directory .flm-list {
+  display: grid;
+  gap: 0.75rem;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
 }
 
-.flm-root.flm-layout-directory .flm-item {
+.flm-root.flm-template-directory .flm-item {
   align-items: start;
   background: transparent;
   border-width: 0 0 0 3px;
@@ -16,32 +18,32 @@
   row-gap: 0.35rem;
 }
 
-.flm-root.flm-layout-directory .flm-item:hover {
+.flm-root.flm-template-directory .flm-item:hover {
   border-color: var(--flm-healthy);
 }
 
-.flm-root.flm-layout-directory .flm-logo {
+.flm-root.flm-template-directory .flm-logo {
   border-radius: 50%;
   flex-basis: 2.5rem;
   height: 2.5rem;
   width: 2.5rem;
 }
 
-.flm-root.flm-layout-directory .flm-link {
+.flm-root.flm-template-directory .flm-link {
   align-items: flex-start;
   grid-column: 1;
   grid-row: 1;
 }
 
-.flm-root.flm-layout-directory .flm-description {
+.flm-root.flm-template-directory .flm-description {
   -webkit-line-clamp: 3;
 }
 
-.flm-root.flm-layout-directory .flm-meta {
+.flm-root.flm-template-directory .flm-meta {
   display: contents;
 }
 
-.flm-root.flm-layout-directory .flm-status {
+.flm-root.flm-template-directory .flm-status {
   align-self: start;
   grid-column: 2;
   grid-row: 1;
@@ -50,15 +52,15 @@
   white-space: nowrap;
 }
 
-.flm-root.flm-layout-directory .flm-status-short {
+.flm-root.flm-template-directory .flm-status-short {
   display: inline;
 }
 
-.flm-root.flm-layout-directory .flm-status-detail {
+.flm-root.flm-template-directory .flm-status-detail {
   display: none;
 }
 
-.flm-root.flm-layout-directory .flm-checked {
+.flm-root.flm-template-directory .flm-checked {
   align-self: end;
   grid-column: 1 / -1;
   grid-row: 2;

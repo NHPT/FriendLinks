@@ -12,6 +12,9 @@ final class ContentInjector
     /** @var string|null */
     private static $lastRenderedHtml;
 
+    /** @var bool */
+    private static $scriptRendered = false;
+
     public static function injectLinks($content, $widget, $lastResult = null)
     {
         $baseContent = null === $lastResult ? $content : $lastResult;
@@ -34,28 +37,10 @@ final class ContentInjector
             return null === $lastResult ? $header : $lastResult;
         }
 
-        $pluginBase = rtrim((string) Options::alloc()->pluginUrl, '/') . '/FriendLinks/';
-        $assetBase = $pluginBase . 'assets/';
-        $cssPath = dirname(__DIR__, 2) . '/assets/frontend.css';
-        $jsPath = dirname(__DIR__, 2) . '/assets/frontend.js';
-        echo '<link rel="stylesheet" href="' . htmlspecialchars(
-            $assetBase . 'frontend.css?v=' . AssetVersion::forFile($cssPath),
-            ENT_QUOTES,
-            'UTF-8'
-        ) . '">' . "\n";
-        $catalog = new TemplateCatalog();
-        $template = $catalog->get((string) Settings::get('frontend_template', 'cards'));
-        $stylesheetPath = $catalog->stylesheetPath($template);
-        if (null !== $stylesheetPath) {
-            $templateUrl = $pluginBase . 'templates/'
-                . rawurlencode($template['id']) . '/style.css?v=' . AssetVersion::forFile($stylesheetPath);
-            echo '<link rel="stylesheet" href="' . htmlspecialchars($templateUrl, ENT_QUOTES, 'UTF-8') . '">' . "\n";
+        if (!self::$scriptRendered) {
+            echo self::scriptTag();
+            self::$scriptRendered = true;
         }
-        echo '<script defer src="' . htmlspecialchars(
-            $assetBase . 'frontend.js?v=' . AssetVersion::forFile($jsPath),
-            ENT_QUOTES,
-            'UTF-8'
-        ) . '"></script>' . "\n";
         return null === $lastResult ? $header : $lastResult;
     }
 
@@ -76,7 +61,8 @@ final class ContentInjector
         echo '<script>(function(){'
             . 'var t=document.getElementById("flm-footer-fallback-template");'
             . 'if(!t)return;'
-            . 'if(document.querySelector(".flm-root")){t.remove();return;}'
+            . 'if(document.querySelector("friend-links-widget[data-flm-host]")){t.remove();'
+            . 'if(window.FriendLinksFrontend){window.FriendLinksFrontend.mountAll();}return;}'
             . 'var target=document.querySelector(".post-content")'
             . '||document.querySelector(".entry-content")'
             . '||document.querySelector("article")'
@@ -84,8 +70,12 @@ final class ContentInjector
             . 'var fragment=t.content?t.content.cloneNode(true):null;'
             . 'if(fragment&&target){target.appendChild(fragment);}'
             . 'else if(fragment&&t.parentNode){t.parentNode.insertBefore(fragment,t);}'
-            . 't.remove();'
+            . 't.remove();if(window.FriendLinksFrontend){window.FriendLinksFrontend.mountAll();}'
             . '})();</script>' . "\n";
+        if (!self::$scriptRendered) {
+            echo self::scriptTag();
+            self::$scriptRendered = true;
+        }
 
         return $lastResult;
     }
@@ -111,8 +101,41 @@ final class ContentInjector
 
     private static function renderLinks(): string
     {
-        self::$lastRenderedHtml = (new Renderer())->render((new Repositories())->frontendLinks());
+        $catalog = new TemplateCatalog();
+        $template = $catalog->get((string) Settings::get('frontend_template', 'cards'));
+        $pluginBase = rtrim((string) Options::alloc()->pluginUrl, '/') . '/FriendLinks/';
+        $basePath = dirname(__DIR__, 2) . '/assets/frontend.css';
+        $templatePath = $catalog->stylesheetPath($template);
+        if (null === $templatePath) {
+            throw new \RuntimeException('当前展示模板缺少 style.css。');
+        }
+        $baseUrl = $pluginBase . 'assets/frontend.css?v=' . AssetVersion::forFile($basePath);
+        $templateUrl = $pluginBase . 'templates/' . rawurlencode($template['id'])
+            . '/style.css?v=' . AssetVersion::forFile($templatePath);
+        $content = (new Renderer())->render((new Repositories())->frontendLinks(), $template['id']);
+
+        self::$lastRenderedHtml = '<friend-links-widget data-flm-host'
+            . ' style="display:block !important;max-width:100% !important;width:100% !important">'
+            . '<template shadowrootmode="open" data-flm-shadow>'
+            . '<link rel="stylesheet" href="' . self::escape($baseUrl) . '">'
+            . '<link rel="stylesheet" href="' . self::escape($templateUrl) . '">'
+            . $content
+            . '</template></friend-links-widget>';
         return self::$lastRenderedHtml;
+    }
+
+    private static function scriptTag(): string
+    {
+        $pluginBase = rtrim((string) Options::alloc()->pluginUrl, '/') . '/FriendLinks/';
+        $scriptPath = dirname(__DIR__, 2) . '/assets/frontend.js';
+        return '<script defer data-flm-frontend src="' . self::escape(
+            $pluginBase . 'assets/frontend.js?v=' . AssetVersion::forFile($scriptPath)
+        ) . '"></script>' . "\n";
+    }
+
+    private static function escape(string $value): string
+    {
+        return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     private static function logRenderFailure(\Throwable $error): void

@@ -1,4 +1,5 @@
 {
+  "schema": 1,
   "title": "极简文字",
   "description": "隐藏 Logo 和描述，只保留名称与公开状态，适合侧重阅读的页面。",
   "layout": "minimal"

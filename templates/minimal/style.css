@@ -1,10 +1,10 @@
-.flm-root.flm-layout-minimal .flm-list {
+.flm-root.flm-template-minimal .flm-list {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem 1.1rem;
 }
 
-.flm-root.flm-layout-minimal .flm-item {
+.flm-root.flm-template-minimal .flm-item {
   align-items: center;
   background: transparent;
   border: 0;
@@ -15,31 +15,31 @@
   padding: 0.25rem 0;
 }
 
-.flm-root.flm-layout-minimal .flm-logo,
-.flm-root.flm-layout-minimal .flm-description,
-.flm-root.flm-layout-minimal .flm-checked {
+.flm-root.flm-template-minimal .flm-logo,
+.flm-root.flm-template-minimal .flm-description,
+.flm-root.flm-template-minimal .flm-checked {
   display: none;
 }
 
-.flm-root.flm-layout-minimal .flm-copy {
+.flm-root.flm-template-minimal .flm-copy {
   display: inline;
 }
 
-.flm-root.flm-layout-minimal .flm-name {
+.flm-root.flm-template-minimal .flm-name {
   font-weight: 600;
 }
 
-.flm-root.flm-layout-minimal .flm-meta {
+.flm-root.flm-template-minimal .flm-meta {
   border: 0;
   margin: 0;
   padding: 0;
 }
 
-.flm-root.flm-layout-minimal .flm-status {
+.flm-root.flm-template-minimal .flm-status {
   font-size: 0;
 }
 
-.flm-root.flm-layout-minimal .flm-status-dot {
+.flm-root.flm-template-minimal .flm-status-dot {
   height: 0.5rem;
   width: 0.5rem;
 }

@@ -491,6 +491,8 @@ $healthPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/health.php'
 $settingsPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/settings.php');
 $notificationsPanel = (string) file_get_contents(dirname(__DIR__) . '/panel/notifications.php');
 $frontendStyles = (string) file_get_contents(dirname(__DIR__) . '/assets/frontend.css');
+$frontendScript = (string) file_get_contents(dirname(__DIR__) . '/assets/frontend.js');
+$cardsStyles = (string) file_get_contents(dirname(__DIR__) . '/templates/cards/style.css');
 $adminScript = (string) file_get_contents(dirname(__DIR__) . '/assets/admin.js');
 $adminStyles = (string) file_get_contents(dirname(__DIR__) . '/assets/admin.css');
 $actionSource = (string) file_get_contents(dirname(__DIR__) . '/Action.php');
@@ -620,11 +622,20 @@ $check(
         && false !== strpos($frontendStyles, 'margin: 0 !important')
         && false !== strpos($frontendStyles, 'padding: 0 !important')
         && false !== strpos($frontendStyles, '.flm-root .flm-item')
-        && false !== strpos($frontendStyles, 'html.theme-dark .flm-root')
+        && false !== strpos($frontendStyles, ':host([data-flm-dark]) .flm-root')
         && false !== strpos($frontendStyles, '--flm-bg: var(--theme-surface')
         && false !== strpos($frontendStyles, '--flm-accent: var(--theme-accent')
-        && false !== strpos($frontendStyles, '--flm-accent-soft: var(--theme-accent-soft'),
-    'frontend renderer clears theme list spacing and follows theme color variables'
+        && false !== strpos($frontendStyles, '--flm-accent-soft: var(--theme-accent-soft')
+        && false !== strpos($cardsStyles, '.flm-root.flm-template-cards .flm-list')
+        && false !== strpos($cardsStyles, 'grid-template-columns: repeat(3, minmax(0, 1fr))'),
+    'frontend base styles expose theme colors while the card template owns its layout'
+);
+$check(
+    false !== strpos($frontendScript, 'host.attachShadow')
+        && false !== strpos($frontendScript, 'host.shadowRoot')
+        && false !== strpos($frontendScript, 'data-flm-dark')
+        && false !== strpos($frontendScript, 'window.FriendLinksFrontend'),
+    'frontend script mounts isolated components and synchronizes explicit dark themes'
 );
 $check(
     false === strpos($notificationsPanel, '测试已保存配置')
@@ -1060,9 +1071,14 @@ $footerFallback = (string) ob_get_clean();
 $check(
     false !== strpos($footerFallback, 'flm-footer-fallback-template')
         && false !== strpos($footerFallback, 'document.querySelector(".post-content")')
+        && false !== strpos($footerFallback, '<friend-links-widget data-flm-host')
+        && false !== strpos($footerFallback, 'shadowrootmode="open"')
+        && false !== strpos($footerFallback, 'assets/frontend.css?v=')
+        && false !== strpos($footerFallback, 'templates/cards/style.css?v=')
+        && false !== strpos($footerFallback, 'data-flm-frontend')
         && false !== strpos($footerFallback, '&lt;Example&gt;')
         && false === strpos($footerFallback, '<Example>'),
-    'frontend footer fallback can inject rendered links when theme bypasses content hooks'
+    'frontend footer fallback injects an isolated component and its required assets'
 );
 $templates = (new TemplateCatalog())->all();
 foreach ($templates as $template) {

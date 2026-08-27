@@ -1,6 +1,6 @@
 # FriendLinks 插件架构设计
 
-> 状态：Release v1.0.0
+> 状态：Release v1.0.1
 > 类型：Typecho 独立插件技术设计
 > 目标版本：Typecho 1.2 及以上、PHP 7.4 及以上
 > 工作名称：`FriendLinks`，最终名称待定
@@ -40,7 +40,7 @@
 
 - 管理端、数据表、检测器、调度器均在插件内。
 - 前端 HTML 和 CSS 均由插件生成。
-- 主题只需遵循 Typecho 标准页面模板约定，调用 `$this->content()`、`$this->header()` 和 `$this->footer()`。
+- 主题只需遵循 Typecho 标准页面模板约定并输出正文或调用 `$this->footer()`。
 - 插件运行时不检测当前主题名称，也不包含主题专用渲染或数据适配分支。
 
 ### 3.2 使用普通独立页面承载展示
@@ -168,7 +168,9 @@ Cron
   -> LinkQueryService
   -> links + current_status
   -> Renderer
-  -> 插件 HTML
+  -> FriendLinks Host
+  -> Shadow Root
+  -> 公共基础 CSS + 当前模板 CSS + 插件 HTML
 ```
 
 ## 5. 目录设计
@@ -280,7 +282,8 @@ DomainRegistrationProbe
 ### 6.5 Renderer
 
 - 输出语义化 HTML。
-- 支持通过白名单 JSON 清单和隔离 CSS 切换展示模板，不执行模板 PHP 或 JavaScript。
+- 使用声明式 Shadow DOM 隔离主题 CSS，并由核心 JavaScript 为不支持声明式模式的浏览器创建 Shadow Root。
+- 支持通过 JSON 清单和独立 CSS 自动发现展示模板，不执行模板 PHP、HTML 或 JavaScript。
 - 支持分类筛选、排序和分页配置。
 - 显示名称、描述、Logo、状态和最后检测时间。
 - 对公开状态使用稳定、可访问的文字，不只依赖颜色。
@@ -828,14 +831,24 @@ SHA-256(body)
 
 ### 17.3 主题隔离
 
-- 根节点使用 `.flm-root`。
-- 所有类名使用 `.flm-` 前缀。
-- CSS 变量只定义在 `.flm-root`。
-- 不设置 `body`、全局 `a`、`ul`、`img` 等选择器。
+- 前台使用 `<friend-links-widget>` 作为唯一宿主，内部内容和样式位于 Shadow Root。
+- 主题针对正文 `a`、`ul`、`li`、`img`、标题和按钮的选择器不能进入 Shadow Root。
+- 宿主只固定块级显示、最大宽度和宽度，避免主题改变组件在正文中的基本占位。
+- `assets/frontend.css` 只包含共享元素、状态、可访问性和公开颜色变量；每个 `templates/<id>/style.css` 独立拥有布局。
+- 所有内部类名使用 `.flm-` 前缀，模板规则限定在 `.flm-root.flm-template-<id>`。
 - 卡片圆角不超过 8px。
-- 明暗模式首先跟随 `prefers-color-scheme`，允许主题通过公开 CSS 变量覆盖，但不识别主题类名。
+- 明暗模式首先跟随 `prefers-color-scheme`；核心脚本把常见显式深色状态同步到宿主属性。
+- `--theme-surface`、`--theme-border`、`--theme-text`、`--theme-link` 等公开 CSS 变量允许穿过 Shadow DOM，用于颜色适配。
 
-如果主题未调用 Typecho 标准 `header()` 钩子，插件页面仍输出语义化 HTML，但不承诺完整样式。这属于主题不满足 Typecho 插件兼容约定，不增加主题专用兜底。
+基础 CSS 和当前模板 CSS 随组件写入 Shadow Root，不依赖主题调用 `header()`。核心 JavaScript 优先从 `header()` 加载；footer fallback 在主题绕过正文钩子或未输出 header 时负责插入组件并补充脚本。
+
+### 17.4 展示模板契约
+
+每个模板位于 `templates/<id>/`，必须包含 `manifest.json` 和 `style.css`。目录 ID 与清单中的 `layout` 只允许小写字母、数字和连字符，最长 32 个字符；清单 Schema 当前为版本 1。模板目录由 `TemplateCatalog` 自动发现，不维护固定模板数量或布局白名单。
+
+Renderer 提供稳定、已转义的名称、URL、Logo、描述、分类、状态和检测时间节点。模板只能通过作用域限定在 `.flm-root.flm-template-<id>` 的 CSS 控制布局、响应式规则、字段显隐和交互表现，不提供 PHP、自定义 HTML、JavaScript 或用户级模板参数。用户只在后台选择一个完整模板。
+
+公共 `frontend.css` 不包含特定模板布局。新增模板不修改 Renderer 或核心 PHP；只有确实需要新增业务字段或语义节点时才修改公共 DOM 契约，并同步验证全部内置模板。
 
 第三方整页缓存可能延迟状态更新。插件始终输出最近检测时间，不尝试调用未知缓存插件的私有清理接口；管理员应将友链页缓存 TTL 设置为不高于 HTTP 检测周期。
 
