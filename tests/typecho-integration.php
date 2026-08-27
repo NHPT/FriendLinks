@@ -1120,6 +1120,37 @@ $check(
     false !== strpos($disabledHtml, 'flm-item-state-disabled'),
     'disabled status is not replaced by stale-data state'
 );
+$rendererSettings = Settings::all();
+$weeklySettings = $rendererSettings;
+$weeklySettings['http_interval'] = 21600;
+$weeklySettings['cron_interval_value'] = 1;
+$weeklySettings['cron_interval_unit'] = 'weeks';
+Settings::save($weeklySettings);
+$weeklyStatusLink = [[
+    'name' => 'Weekly status',
+    'url' => 'https://example.com/weekly',
+    'description' => '',
+    'logo_url' => '',
+    'category_name' => null,
+    'category_slug' => null,
+    'overall_state' => 'healthy',
+    'reason_code' => null,
+    'checked_at' => time() - (3 * 86400),
+]];
+$weeklyStatusHtml = (new Renderer())->render($weeklyStatusLink, 'cards');
+$check(
+    false !== strpos($weeklyStatusHtml, 'flm-item-state-healthy')
+        && false === strpos($weeklyStatusHtml, '检测数据已过期'),
+    'frontend freshness respects a weekly CLI schedule'
+);
+$weeklyStatusLink[0]['checked_at'] = time() - (15 * 86400);
+$expiredWeeklyStatusHtml = (new Renderer())->render($weeklyStatusLink, 'cards');
+$check(
+    false !== strpos($expiredWeeklyStatusHtml, 'flm-item-state-unknown')
+        && false !== strpos($expiredWeeklyStatusHtml, '检测数据已过期'),
+    'frontend marks data stale only after two effective scheduling intervals'
+);
+Settings::save($rendererSettings);
 
 $token = str_repeat('a', 32);
 $leaseNow = time();
