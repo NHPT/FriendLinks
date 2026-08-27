@@ -67,7 +67,7 @@ final class ContentInjector
             . '||document.querySelector(".entry-content")'
             . '||document.querySelector("article")'
             . '||document.querySelector("main");'
-            . 'var fragment=t.content?t.content.cloneNode(true):null;'
+            . 'var fragment=t.content||null;'
             . 'if(fragment&&target){target.appendChild(fragment);}'
             . 'else if(fragment&&t.parentNode){t.parentNode.insertBefore(fragment,t);}'
             . 't.remove();if(window.FriendLinksFrontend){window.FriendLinksFrontend.mountAll();}'

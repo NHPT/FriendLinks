@@ -1076,6 +1076,8 @@ $check(
         && false !== strpos($footerFallback, 'assets/frontend.css?v=')
         && false !== strpos($footerFallback, 'templates/cards/style.css?v=')
         && false !== strpos($footerFallback, 'data-flm-frontend')
+        && false !== strpos($footerFallback, 'var fragment=t.content||null')
+        && false === strpos($footerFallback, 't.content.cloneNode(true)')
         && false !== strpos($footerFallback, '&lt;Example&gt;')
         && false === strpos($footerFallback, '<Example>'),
     'frontend footer fallback injects an isolated component and its required assets'

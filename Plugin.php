@@ -23,7 +23,7 @@ require_once __DIR__ . '/vendor/autoload.php';
  *
  * @package FriendLinks
  * @author NHPT
- * @version 1.0.1
+ * @version 1.0.2
  * @since 1.2.0
  * @link https://github.com/NHPT/FriendLinks
  */
