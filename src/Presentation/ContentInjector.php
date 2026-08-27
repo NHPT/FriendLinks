@@ -103,25 +103,30 @@ final class ContentInjector
     {
         $catalog = new TemplateCatalog();
         $template = $catalog->get((string) Settings::get('frontend_template', 'cards'));
-        $pluginBase = rtrim((string) Options::alloc()->pluginUrl, '/') . '/FriendLinks/';
         $basePath = dirname(__DIR__, 2) . '/assets/frontend.css';
         $templatePath = $catalog->stylesheetPath($template);
         if (null === $templatePath) {
             throw new \RuntimeException('当前展示模板缺少 style.css。');
         }
-        $baseUrl = $pluginBase . 'assets/frontend.css?v=' . AssetVersion::forFile($basePath);
-        $templateUrl = $pluginBase . 'templates/' . rawurlencode($template['id'])
-            . '/style.css?v=' . AssetVersion::forFile($templatePath);
+        $styles = self::stylesheet($basePath) . "\n" . self::stylesheet($templatePath);
         $content = (new Renderer())->render((new Repositories())->frontendLinks(), $template['id']);
 
         self::$lastRenderedHtml = '<friend-links-widget data-flm-host'
             . ' style="display:block !important;max-width:100% !important;width:100% !important">'
             . '<template shadowrootmode="open" data-flm-shadow>'
-            . '<link rel="stylesheet" href="' . self::escape($baseUrl) . '">'
-            . '<link rel="stylesheet" href="' . self::escape($templateUrl) . '">'
+            . '<style data-flm-styles>' . $styles . '</style>'
             . $content
             . '</template></friend-links-widget>';
         return self::$lastRenderedHtml;
+    }
+
+    private static function stylesheet(string $path): string
+    {
+        $content = @file_get_contents($path);
+        if (false === $content) {
+            throw new \RuntimeException('无法读取前台样式资源。');
+        }
+        return (string) preg_replace('/<\/style/i', '<\\/style', $content);
     }
 
     private static function scriptTag(): string

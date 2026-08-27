@@ -30,7 +30,7 @@
 5. 卡片模板在桌面端计算为三列 Grid。
 6. 桌面端和移动端组件高度均大于 0。
 7. 移动端不存在横向内容溢出。
-8. 公共 `frontend.css` 与当前模板 `style.css` 均加载成功。
+8. 公共 `frontend.css` 与当前模板 `style.css` 已同步内联进 Shadow Root，内容出现时样式已经生效。
 9. 普通正文注入或 footer fallback 至少有一条可用渲染路径。
 
 测试会阻止主题访问外部 CDN，避免第三方网络状态影响结果。同源主题资源正常加载；主题自身因外部依赖缺失产生的 JavaScript 错误不计为 FriendLinks 失败，但 FriendLinks 的宿主、Shadow Root、内容、布局和资源仍必须全部通过上述断言。

@@ -1073,14 +1073,15 @@ $check(
         && false !== strpos($footerFallback, 'document.querySelector(".post-content")')
         && false !== strpos($footerFallback, '<friend-links-widget data-flm-host')
         && false !== strpos($footerFallback, 'shadowrootmode="open"')
-        && false !== strpos($footerFallback, 'assets/frontend.css?v=')
-        && false !== strpos($footerFallback, 'templates/cards/style.css?v=')
+        && false !== strpos($footerFallback, '<style data-flm-styles>')
+        && false !== strpos($footerFallback, '.flm-root.flm-template-cards .flm-list')
+        && false === strpos($footerFallback, '<link rel="stylesheet"')
         && false !== strpos($footerFallback, 'data-flm-frontend')
         && false !== strpos($footerFallback, 'var fragment=t.content||null')
         && false === strpos($footerFallback, 't.content.cloneNode(true)')
         && false !== strpos($footerFallback, '&lt;Example&gt;')
         && false === strpos($footerFallback, '<Example>'),
-    'frontend footer fallback injects an isolated component and its required assets'
+    'frontend footer fallback injects an isolated component with synchronous styles'
 );
 $templates = (new TemplateCatalog())->all();
 foreach ($templates as $template) {
