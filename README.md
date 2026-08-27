@@ -531,7 +531,7 @@ TYPECHO_TEST_ROOT=/path/to/typecho php tests/typecho-integration.php
 
 ### 主题兼容性
 
-截至 2026-08-27，FriendLinks v1.0.1 已在 30 个固定版本的真实 Typecho 主题上完成运行验证，覆盖默认主题、传统 PHP 模板、Bootstrap、MDUI、PJAX/Swup、深色模式及高优先级正文样式。每个主题均实际启用并请求绑定 FriendLinks 的普通独立页面，验证了正文注入或 footer fallback、Shadow Root、组件资源、桌面三列卡片和移动端横向溢出。
+截至 2026-08-27，FriendLinks v1.0.2 已在 30 个固定版本的真实 Typecho 主题上完成运行验证，覆盖默认主题、传统 PHP 模板、Bootstrap、MDUI、PJAX/Swup、深色模式及高优先级正文样式。每个主题均实际启用并请求绑定 FriendLinks 的普通独立页面，验证了正文注入或 footer fallback、Shadow Root、组件资源、桌面三列卡片和移动端横向溢出。
 
 完整的测试环境、判定标准、主题仓库和固定提交见 [`docs/theme-compatibility.md`](docs/theme-compatibility.md)。该结果只对应报告中的主题版本，不承诺未来主题更新不会引入兼容性变化。
 
