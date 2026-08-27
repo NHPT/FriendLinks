@@ -1,6 +1,6 @@
 # FriendLinks 插件架构设计
 
-> 状态：Release v1.0.2
+> 状态：Release v1.0.1
 > 类型：Typecho 独立插件技术设计
 > 目标版本：Typecho 1.2 及以上、PHP 7.4 及以上
 > 工作名称：`FriendLinks`，最终名称待定
